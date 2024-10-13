@@ -1,3 +1,9 @@
+# Don't push the huge data 
+data/
+
+# mac icon placement metadata 
+.DS_Store
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

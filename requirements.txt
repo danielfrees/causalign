@@ -1,0 +1,6 @@
+pandas>=2.2.3
+torch>=2.4.1
+numpy>=2.1.2
+transformers>=4.45.2
+pyarrow>=17
+fastparquet>=2024
