@@ -8,3 +8,15 @@ Vanilla contrastive encoding training with pos/neg examples.
 Contrastive encoding training with additional causal regularization (ITVReg).
 TODO: New method? Time permitting
 """
+
+
+# ================== Contrastive Encoding Baseline Training ===================
+
+
+
+
+
+# ================== Contrastive Encoding with ITVReg Training ===================
+
+
+
