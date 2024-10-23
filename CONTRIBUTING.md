@@ -15,6 +15,14 @@ python --version
 python -m pip list
 ```
 
+# How to contribute
+
+1. Make a fork of the repo
+2. Make a branch in your fork named either f/feature_name or b/bug_name. Set upstream to this main repo, and origin to your fork. 
+3. Regularly pull from upstream so your branch is up to date. Push to origin when you have a big push ready to go. When the bug is fixed or feature is complete, open a PR to upstream. 
+
+^ Will add details later to make this easier. 
+
 # `causalign` package structure
 
 `causalign` contains the various scripts for causally regularized text matching:
