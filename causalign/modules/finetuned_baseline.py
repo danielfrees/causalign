@@ -6,9 +6,9 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, Subset
 from torch.amp import autocast, GradScaler
 from tqdm import tqdm
-from datasets import (
-    NLIClassificationDataset,
-    load_nli_data
+from datasets.generators import (
+    TextAlignDataset,
+    load_data
 )
 
 from causalign.modules.bert_pretrained import BertPreTrained
@@ -23,12 +23,12 @@ def main(args):
     """
     device = torch.device('cuda') if args.use_gpu else torch.device('cpu')
 
-    nli_data = load_nli_data(args.nli_filename)
-    print("NLI Data loaded")
-    dataset = NLIClassificationDataset(nli_data, args)
+    nli_data = load_data(args.nli_filename)
+    print("ACL Abstract Data loaded")
+    dataset = TextAlignDataset(nli_data, args)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn,
                             num_workers=args.num_workers)
-    print("NLI Dataloader created")
+    print("ACL Abstract Dataloader created")
 
     # Setup config to be saved later
     config = {'tau': args.tau,

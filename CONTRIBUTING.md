@@ -27,7 +27,7 @@ python -m pip list
 
 `causalign` contains the various scripts for causally regularized text matching:
 
-`data/generators` contains preprocessing scripts to produce the train/val/test data (for ACL abstracts)
+`datasets/generators` contains preprocessing scripts to produce the train/val/test data (for ACL abstracts)
 
 ^ TODO: turn the preprocessing notebook into a script for replicability
 
