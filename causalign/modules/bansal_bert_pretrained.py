@@ -19,7 +19,7 @@ from transformers import get_scheduler,AdamW
 from transformers import AutoTokenizer
 import nltk
 import scipy.sparse as sp
-
+from constants import DEVICE
 
 
 # OG Bansal model
@@ -32,13 +32,13 @@ class MSMarcoBERTModel(torch.nn.Module):
         self.hidden_dim = 8192
         self.target_encoder = copy.deepcopy(self.encoder).requires_grad_(False)
         self.predictor = torch.nn.Sequential(torch.nn.Linear(self.rep_dim,self.hidden_dim),
-                                             torch.nn.BatchNorm1d(self.hidden_dim),
-                                             torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.hidden_dim),
-                                             torch.nn.BatchNorm1d(self.hidden_dim),
-                                             torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.hidden_dim),
-                                             torch.nn.BatchNorm1d(self.hidden_dim),
-                                            #  torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.hidden_dim),
-                                             torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.rep_dim))
+                torch.nn.BatchNorm1d(self.hidden_dim),
+                torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.hidden_dim),
+                torch.nn.BatchNorm1d(self.hidden_dim),
+                torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.hidden_dim),
+                torch.nn.BatchNorm1d(self.hidden_dim),
+            #  torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.hidden_dim),
+                torch.nn.ReLU(),torch.nn.Linear(self.hidden_dim,self.rep_dim))
         self.gamma = gamma
         
     def forward(self,x,y):
