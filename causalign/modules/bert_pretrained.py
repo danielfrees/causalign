@@ -18,6 +18,7 @@ class SimDistilBERT(nn.Module):
     def __init__(self,
                 args,
                 pretrained_model_name='sentence-transformers/msmarco-distilbert-base-v3', 
+                hidden_size=768,
                 device=DEVICE):
         super(SimDistilBERT, self).__init__()
         self.p = args
@@ -30,9 +31,16 @@ class SimDistilBERT(nn.Module):
         # Set max sequence length from arguments
         self.bert.config.max_position_embeddings = args.max_seq_length
         self.frozen_bert.config.max_position_embeddings = args.max_seq_length
-        self.logistic = nn.Sequential(
-            nn.Linear(1, 1),  # TODO: Can look at more complex prediction head
-            nn.Sigmoid()
+        
+        # TODO: more complex similarity head
+        self.similarity_head = nn.Sequential(
+            nn.Linear(self.bert.config.hidden_size + 1, hidden_size),  # input size: emb diff + 1 for cosine similarity
+            nn.BatchNorm1d(hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size //2), 
+            nn.BatchNorm1d(hidden_size // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_size // 2, 1)
         )
 
         # Train bert and logistic regression head, do not train frozen pre-trained encoder
@@ -40,7 +48,7 @@ class SimDistilBERT(nn.Module):
             param.requires_grad = True
         for param in self.frozen_bert.parameters():
             param.requires_grad = False
-        for param in self.logistic.parameters():
+        for param in self.similarity_head.parameters():
             param.requires_grad = True
 
         self.bert.to(self.device)
@@ -90,8 +98,9 @@ class SimDistilBERT(nn.Module):
         emb_2 = self.encode(input_ids_2, attention_mask_2, frozen)
         
         # logistic regression head using cosine similarity
-        entailed = self.logistic(torch.nn.functional.cosine_similarity(emb_1, emb_2).unsqueeze(1))
+        features = torch.cat((emb_1 - emb_2, torch.nn.functional.cosine_similarity(emb_1, emb_2).unsqueeze(1)), dim = 1)
+        logits = self.similarity_head(features)
 
-        return entailed
+        return logits
         
         

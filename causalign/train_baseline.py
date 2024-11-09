@@ -60,7 +60,8 @@ def compute_loss(model, input_ids_1, attention_mask_1, input_ids_2, attention_ma
 
     Returns:
     - total_loss: The weighted sum of the three losses.
-    - entailment_preds, contradiction_preds: The predictions from the logistic regression head.
+    - entailment_logits, contradiction_logits: The predictions from the logistic regression head.
+    - sim_p_e, sim_p_c: The average cosine similarities between the premise and entailment/contradiction embeddings.
     """
     # Encode embeddings using the model's encoder
     premise_emb = model.encode(input_ids_1, attention_mask_1)
@@ -75,21 +76,21 @@ def compute_loss(model, input_ids_1, attention_mask_1, input_ids_2, attention_ma
     sim_p_c = torch.nn.functional.cosine_similarity(premise_emb, contradiction_emb)
 
     # Compute predictions through the entailment head
-    entailment_preds = model(input_ids_1, attention_mask_1, input_ids_2, attention_mask_2)
-    contradiction_preds = model(input_ids_1, attention_mask_1, input_ids_3, attention_mask_3)
+    entailment_logits = model(input_ids_1, attention_mask_1, input_ids_2, attention_mask_2)
+    contradiction_logits = model(input_ids_1, attention_mask_1, input_ids_3, attention_mask_3)
 
     # Targets for binary classification (entailments: 1, contradictions: 0)
-    entailment_targets = torch.ones_like(entailment_preds)
-    contradiction_targets = torch.zeros_like(contradiction_preds)
+    entailment_targets = torch.ones_like(entailment_logits)
+    contradiction_targets = torch.zeros_like(contradiction_logits)
 
     # Compute the binary cross-entropy loss
-    loss_entailment = bce_loss_fn(entailment_preds, entailment_targets)
-    loss_contradiction = bce_loss_fn(contradiction_preds, contradiction_targets)
+    loss_entailment = bce_loss_fn(entailment_logits, entailment_targets)
+    loss_contradiction = bce_loss_fn(contradiction_logits, contradiction_targets)
 
     # Weighted sum of the losses
     total_loss = lambda_cse * loss_simcse + lambda_entailment * loss_entailment + lambda_contradiction * loss_contradiction
 
-    return total_loss, entailment_preds, contradiction_preds, sim_p_e, sim_p_c
+    return total_loss, entailment_logits, contradiction_logits, sim_p_e, sim_p_c
 
 
 def train_baseline(args):
@@ -101,7 +102,8 @@ def train_baseline(args):
 
     print("Loading ACL data...")
     nli_data = load_acl_data(citation_file=args.acl_citation_filename, 
-                            pub_info_file=args.acl_pub_info_filename)
+                            pub_info_file=args.acl_pub_info_filename,
+                            row_limit=args.limit_data)
     print("ACL Abstract Data loaded")
     dataset = TextAlignDataset(nli_data, args)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, 
@@ -119,6 +121,7 @@ def train_baseline(args):
             'lambda_cse': args.lambda_cse,
             'lambda_entailment': args.lambda_entailment,
             'lambda_contradiction': args.lambda_contradiction,
+            'row_limit': args.limit_data,
     }
     run_name = f"regime_{config['train_regime']}_id_{uuid.uuid4().hex[:8]}"
     if wandb.run is None:
@@ -158,7 +161,7 @@ def train_baseline(args):
 
             if args.autocast:
                 with autocast():
-                    total_loss, entailment_preds, contradiction_preds, sim_p_e, sim_p_c = compute_loss(
+                    total_loss, entailment_logits, contradiction_logits, sim_p_e, sim_p_c = compute_loss(
                         model, input_ids_1, attention_mask_1, input_ids_2, attention_mask_2,
                         input_ids_3, attention_mask_3, criterion, bce_loss_fn,
                         lambda_cse=args.lambda_cse, lambda_entailment=args.lambda_entailment, lambda_contradiction=args.lambda_contradiction
@@ -168,7 +171,7 @@ def train_baseline(args):
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                total_loss, entailment_preds, contradiction_preds, sim_p_e, sim_p_c = compute_loss(
+                total_loss, entailment_logits, contradiction_logits, sim_p_e, sim_p_c = compute_loss(
                     model, input_ids_1, attention_mask_1, input_ids_2, attention_mask_2,
                     input_ids_3, attention_mask_3, criterion, bce_loss_fn,
                     lambda_cse=args.lambda_cse, lambda_entailment=args.lambda_entailment, lambda_contradiction=args.lambda_contradiction
@@ -178,8 +181,9 @@ def train_baseline(args):
                 optimizer.step()
 
             # Calculate correct predictions based on logistic regression outputs
-            correct_entailments = ((entailment_preds > 0).float() == 1).sum().item()
-            correct_contradictions = ((contradiction_preds <= 0).float() == 1).sum().item()
+            #TODO: fix accuracy calculation, something is wrong as i keep getting 0.5 constantly 
+            correct_entailments = (entailment_logits > 0).float().sum().item()  # Positive logits imply entailment (true pos)
+            correct_contradictions = (contradiction_logits <= 0).float().sum().item()  # Non-positive logits imply contradiction (true neg)
             batch_size = input_ids_1.size(0)
             total_batch_examples = batch_size * 2  # Two predictions per example: entailment + contradiction
             total_correct += correct_entailments + correct_contradictions
@@ -187,8 +191,8 @@ def train_baseline(args):
 
             running_loss += total_loss.item()
             
-            # log metrics every 200 iterations # TODO: add a --log_every flag
-            if i % 200 == 0:
+            # log metrics every log_every iterations
+            if i % args.log_every == 0:
                 avg_running_loss = running_loss / (i + 1)
                 wandb.log({"train/loss": avg_running_loss, 
                         "train/accuracy": total_correct / total_examples,
@@ -197,6 +201,7 @@ def train_baseline(args):
                         "iteration": i})
 
         print(f"Epoch {epoch + 1}, Loss: {running_loss / len(dataloader)}")
+        print(f"Accuracy: {total_correct / total_examples}")
 
     # Save the trained model
     save_model(model, optimizer, args, config, args.output_model_path)

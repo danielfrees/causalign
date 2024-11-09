@@ -44,7 +44,7 @@ def get_training_args(regime = 'base'):
         parser.add_argument("--num_workers", type=int, default=14)   # tune for your machine 
         parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')   # tune for your machine
         parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate')
-        parser.add_argument('--epochs', type=int, default=3, help='Number of training epochs')
+        parser.add_argument('--epochs', type=int, default=20, help='Number of training epochs')
         parser.add_argument('--tau', type=float, default=0.1, help='Temperature parameter for contrastive loss')
         parser.add_argument("--curriculum_training", action='store_true')
         parser.add_argument("--lambda_", type=float, default=1.0, help='lambda for pacing function')
@@ -53,10 +53,16 @@ def get_training_args(regime = 'base'):
         parser.add_argument("--sort_by_cosine_contradiction", action='store_true')
         parser.add_argument("--max_seq_length", type=int, default=100, help='Truncate texts to this number of tokens. Useful for faster training.')
         
+        # logging 
+        parser.add_argument("--log_every", type=int, default=5, help='Log training progress every n batches') # TODO: Revert to >200 for faster training on big dataset
+        
+        # limit data for testing 
+        parser.add_argument("--limit_data", type=int, default=500, help='Number of rows to include from ACL dataset.') #TODO: revert to full data
+        
         # weights for the total loss
         parser.add_argument("--lambda_cse", type=float, default=1.0, help='Weight for SimCSE loss')
-        parser.add_argument("--lambda_entailment", type=float, default=0, help='Weight for entailment BCE loss')
-        parser.add_argument("--lambda_contradiction", type=float, default=0, help='Weight for contradiction BCE loss')
+        parser.add_argument("--lambda_entailment", type=float, default=0.25, help='Weight for entailment BCE loss')
+        parser.add_argument("--lambda_contradiction", type=float, default=0.25, help='Weight for contradiction BCE loss')
         
     elif regime == 'itvreg':
         raise NotImplementedError 

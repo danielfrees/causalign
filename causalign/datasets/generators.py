@@ -76,7 +76,8 @@ class TextAlignDataset(Dataset):
 
 
 def load_acl_data(citation_file = 'acl_full_citations.parquet', 
-        pub_info_file = 'acl-publication-info.74k.v2.parquet'):
+        pub_info_file = 'acl-publication-info.74k.v2.parquet', 
+        row_limit = None):
     data_directory = os.path.join(CAUSALIGN_DIR, 'data')
 
     print(f"Loading data from {data_directory}")
@@ -84,6 +85,9 @@ def load_acl_data(citation_file = 'acl_full_citations.parquet',
     df_pub = pd.read_parquet(os.path.join(data_directory, pub_info_file))
 
     dataset = create_triplets(df_cit, df_pub)
+    
+    if row_limit:
+        dataset = dataset[:row_limit]
 
     return dataset
 
