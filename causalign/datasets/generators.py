@@ -1,6 +1,6 @@
 """ 
 Logic for generating and preprocessing the train/val/test datasets for the ACL 
-citations abstract-matching task. 
+citations abstract-matching task and for the sentiment prediction tasks. 
 """
 
 import pandas as pd 
@@ -11,14 +11,79 @@ TOP_DIR = os.path.abspath(os.path.join(os.getcwd(), '..'))
 if TOP_DIR not in sys.path:
     sys.path.insert(0, TOP_DIR)
 from causalign.constants import CAUSALIGN_DIR, CITING_ID_COL, CITED_ID_COL, NEGATIVE_ID_COL, CORPUS_ID_COL
-
+from tqdm.auto import tqdm
+from typing import Dict, List
 import torch
 from torch.utils.data import Dataset
-from tqdm.auto import tqdm
 from transformers import DistilBertTokenizer, AutoTokenizer
-from typing import Dict, List
 
+class IMDBDataset(Dataset):
+    def __init__(self, reviews, targets, args):
+        self.reviews = reviews
+        self.target = targets
+        self.p = args
+        self.max_length = args.max_seq_length
 
+        self.tokenizer = None
+        if args.pretrained_model_name in ['bert-base-uncased']:
+            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
+        elif args.pretrained_model_name == 'msmarco-distilbert-base-v3':
+            # Tokenizer initialization is not necessary since SentenceTransformer handles it
+            self.tokenizer = DistilBertTokenizer.from_pretrained(f"sentence-transformers/{args.pretrained_model_name}")
+        else:
+            raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
+        
+    def __len__(self):
+        return len(self.reviews)
+
+    def __getitem__(self, idx):
+        review = str(self.reviews[idx])
+        target = self.target[idx]
+
+        encoding = self.tokenizer(review, return_tensors='pt', padding=True, truncation=True, return_token_type_ids=False, max_length=self.max_length)
+
+        output = {
+            'review_text': review,
+            'target': target,
+            'input_ids': encoding['input_ids'],
+            'attention_mask': encoding['attention_mask']
+        }
+
+        return output
+    
+class CivilCommentsDataset(Dataset):
+    def __init__(self, text, toxicity, args):
+        self.text = text
+        self.toxicity = toxicity
+        self.p = args
+        self.max_length = args.max_seq_length
+
+        self.tokenizer = None
+        if args.pretrained_model_name in ['bert-base-uncased']:
+            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
+        elif args.pretrained_model_name == 'msmarco-distilbert-base-v3':
+            # Tokenizer initialization is not necessary since SentenceTransformer handles it
+            self.tokenizer = DistilBertTokenizer.from_pretrained(f"sentence-transformers/{args.pretrained_model_name}")
+        else:
+            raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
+        
+    def __len__(self):
+        return len(self.text)
+
+    def __getitem__(self, idx):
+        text = str(self.text[idx])
+        toxicity = self.toxicity[idx]
+
+        encoding = self.tokenizer(text, return_tensors='pt', padding=True, truncation=True, return_token_type_ids=False, max_length=self.max_length)
+
+        output = {
+            'text': text,
+            'toxicity': toxicity,
+            'input_ids': encoding['input_ids'],
+            'attention_mask': encoding['attention_mask']
+        }
+
+        return output
 
 class TextAlignDataset(Dataset):
     def __init__(self, dataset, args):
