@@ -85,7 +85,6 @@ class CivilCommentsDataset(Dataset):
 
         return output
 
-
 class TextAlignDataset(Dataset):
     def __init__(self, dataset, args):
         self.dataset = dataset

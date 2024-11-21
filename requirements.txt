@@ -4,3 +4,5 @@ numpy>=2.1.2
 transformers>=4.45.2
 pyarrow>=17
 fastparquet>=2024
+python-dotenv
+wandb
