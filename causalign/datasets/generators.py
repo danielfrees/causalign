@@ -1,18 +1,95 @@
-import pandas as pd 
-import numpy as np
-import os
-
+""" 
+Logic for generating and preprocessing the train/val/test datasets for the ACL 
+citations abstract-matching task. 
+"""
 import torch
 from torch.utils.data import Dataset
+from transformers import DistilBertTokenizer, AutoTokenizer
 
-from transformers import BertTokenizerFast
-
-class TextAlignDataset(Dataset):
-    def __init__(self, dataset, args):
-        self.dataset = dataset
+class IMDBDataset(Dataset):
+    def __init__(self, reviews, targets, args):
+        self.reviews = reviews
+        self.target = targets
         self.p = args
-        self.tokenizer = BertTokenizerFast.from_pretrained('bert-base-uncased')
+        self.max_length = args.max_seq_length
 
+        self.tokenizer = None
+        if args.pretrained_model_name in ['bert-base-uncased']:
+            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
+        elif args.pretrained_model_name == 'msmarco-distilbert-base-v3':
+            # Tokenizer initialization is not necessary since SentenceTransformer handles it
+            self.tokenizer = DistilBertTokenizer.from_pretrained(f"sentence-transformers/{args.pretrained_model_name}")
+        else:
+            raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
+        
+    def __len__(self):
+        return len(self.reviews)
+
+    def __getitem__(self, idx):
+        review = str(self.reviews[idx])
+        target = self.target[idx]
+
+        encoding = self.tokenizer(review, return_tensors='pt', padding=True, truncation=True, return_token_type_ids=False, max_length=self.max_length)
+
+        output = {
+            'review_text': review,
+            'target': target,
+            'input_ids': encoding['input_ids'],
+            'attention_mask': encoding['attention_mask']
+        }
+
+        return output
+    
+class CivilCommentsDataset(Dataset):
+    def __init__(self, text, toxicity, args):
+        self.text = text
+        self.toxicity = toxicity
+        self.p = args
+        self.max_length = args.max_seq_length
+
+        self.tokenizer = None
+        if args.pretrained_model_name in ['bert-base-uncased']:
+            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
+        elif args.pretrained_model_name == 'msmarco-distilbert-base-v3':
+            # Tokenizer initialization is not necessary since SentenceTransformer handles it
+            self.tokenizer = DistilBertTokenizer.from_pretrained(f"sentence-transformers/{args.pretrained_model_name}")
+        else:
+            raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
+        
+    def __len__(self):
+        return len(self.text)
+
+    def __getitem__(self, idx):
+        text = str(self.text[idx])
+        toxicity = self.toxicity[idx]
+
+        encoding = self.tokenizer(text, return_tensors='pt', padding=True, truncation=True, return_token_type_ids=False, max_length=self.max_length)
+
+        output = {
+            'text': text,
+            'toxicity': toxicity,
+            'input_ids': encoding['input_ids'],
+            'attention_mask': encoding['attention_mask']
+        }
+
+        return output
+
+
+class IMDBDataset(Dataset):
+    def __init__(self, reviews, targets, args):
+        self.reviews = reviews
+        self.target = targets
+        self.p = args
+        self.tokenizer = None
+        if args.pretrained_model_name in ['bert-base-uncased']:
+            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
+        elif args.pretrained_model_name == 'msmarco-distilbert-base-v3':
+            # Tokenizer initialization is not necessary since SentenceTransformer handles it
+            self.tokenizer = DistilBertTokenizer.from_pretrained(f"sentence-transformers/{args.pretrained_model_name}")
+        else:
+            raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
+        self.max_length = args.max_seq_length
+        
     def __len__(self):
         return len(self.dataset)
 
@@ -62,63 +139,3 @@ class TextAlignDataset(Dataset):
             }
 
         return batched_data
-
-
-def load_data():
-    data_directory = os.path.dirname(os.path.abspath("__file__"))
-
-    df_cit = pd.read_parquet(os.path.join(data_directory, 'acl_full_citations.parquet'))
-    df_pub = pd.read_parquet(os.path.join(data_directory, 'acl-publication-info.74k.v2.parquet'))
-
-    dataset = create_triplets(df_cit, df_pub)
-
-    return dataset
-
-def create_triplets(df_cit, df_pub):
-    # only keep data for ACL papers (otherwise merge will fail)
-    df_cit_acl = df_cit[(df_cit['is_citedpaperid_acl'] == True) & (df_cit['is_citingpaperid_acl'] == True)]
-
-    df_cit_acl['negativepaperid'] = df_cit_acl.apply(add_negative_label)
-
-    # create positive pairs
-    # get the citing abstract
-    merged = df_cit_acl[['citingpaperid', 'citedpaperid']].merge( #get the citing abstract
-        df_pub[['corpus_paper_id', 'abstract']].rename(columns={'abstract': 'citing_abstract'}),
-        left_on="citingpaperid", right_on="corpus_paper_id", how='inner'
-    ).merge(  # get the cited abstract
-        df_pub[['corpus_paper_id', 'abstract']].rename(columns={'abstract': 'cited_abstract'}),
-        left_on="citedpaperid", right_on="corpus_paper_id", how='inner'
-    ).merge(  # get the negative abstract
-        df_pub[['corpus_paper_id', 'abstract']].rename(columns={'abstract': 'negative_abstract'}),
-        left_on="negativepaperid", right_on="corpus_paper_id", how='inner'
-    )    
-
-    merged = merged[['citing_abstract', 'cited_abstract', 'negative_abstract']]
-
-    triplets = list(merged.itertuples(index=False, name=None))
-
-    return triplets
-
-
-def add_negative_label(row,
-                       df_pos: pd.DataFrame,
-                       df_pub: pd.DataFrame) -> pd.DataFrame:
-    """
-    Add negative examples to the positive examples. For each positive example, sample
-    `num_neg_samples` negative examples by randomly selecting a paper from the corpus, 
-    and confirming that the paper was not cited by `citingpaperid` from 
-    the positive example.
-    """
-    
-    # create a dictionary of citing papers as keys and all their cited papers as values
-    cited_papers = df_pos.loc[df_pos['citingpaperid']==row['citingpaperid'],'citedpaperid'].unique()
-    
-    # get the list of all papers in the corpus
-    all_corpus_papers = df_pub['corpus_paper_id'].unique()
-    
-    # sample num_neg_samples negative examples for each positive example
-    neg_cited_paper = np.random.choice(all_corpus_papers)
-    while neg_cited_paper in cited_papers:   # resample if we sampled a paper that was cited by the citing paper
-        neg_cited_paper = np.random.choice(all_corpus_papers)
-                
-    return neg_cited_paper
