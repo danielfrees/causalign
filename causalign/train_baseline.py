@@ -29,11 +29,9 @@ from types import SimpleNamespace
 import uuid
 
 
-from datasets.generators import (
-    TextAlignDataset,
-    load_acl_data
-)
-from causalign.modules.bert_pretrained import SimDistilBERT
+from datasets.generators import TextAlignDataset
+from datasets.utils import load_acl_data
+from causalign.modules.sim_bert import SimDistilBERT
 from causalign.optim.sim_cse import ContrastiveLearningLoss
 from causalign.utils import save_model, get_training_args, seed_everything
 from causalign.constants import DEVICE

@@ -3,14 +3,15 @@ import numpy as np
 import os
 
 from tqdm.auto import tqdm
-from typing import Dict, List
+from typing import Dict, List, Tuple
+from datasets import Dataset, load_dataset
 
 from causalign.constants import CAUSALIGN_DIR, CITING_ID_COL, CITED_ID_COL, NEGATIVE_ID_COL, CORPUS_ID_COL
 
 
-def load_acl_data(citation_file = 'acl_full_citations.parquet', 
-        pub_info_file = 'acl-publication-info.74k.v2.parquet', 
-        row_limit = None):
+def load_acl_data(citation_file: str = 'acl_full_citations.parquet', 
+        pub_info_file: str = 'acl-publication-info.74k.v2.parquet', 
+        row_limit: int = None)->List[Tuple]:
     data_directory = os.path.join(CAUSALIGN_DIR, 'data')
 
     print(f"Loading data from {data_directory}")
@@ -24,7 +25,7 @@ def load_acl_data(citation_file = 'acl_full_citations.parquet',
 
     return dataset
 
-def create_triplets(df_cit, df_pub):
+def create_triplets(df_cit: pd.DataFrame, df_pub: pd.DataFrame) -> List:
     # only keep data for ACL papers (otherwise merge will fail)
     df_cit_acl = df_cit[(df_cit['is_citedpaperid_acl'] == True) & (df_cit['is_citingpaperid_acl'] == True)].copy()
 
@@ -77,3 +78,14 @@ def add_negative_label(row,
         neg_cited_paper = np.random.choice(all_papers)
                 
     return neg_cited_paper
+
+
+def load_imdb_data(split: str,
+                imdb_data_source: str  = "stanfordnlp/imdb")->Dataset:
+    imdb_ds = load_dataset(imdb_data_source, split = split)
+    return imdb_ds
+
+def load_civil_commments_data(split: str,
+                civil_comments_data_source: str = "google/civil_comments")->Dataset:
+    civil_ds = load_dataset(civil_comments_data_source, split=split)
+    return civil_ds

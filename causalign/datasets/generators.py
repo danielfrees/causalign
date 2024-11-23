@@ -16,14 +16,77 @@ from typing import Dict, List
 import torch
 from torch.utils.data import Dataset
 from transformers import DistilBertTokenizer, AutoTokenizer
+from concurrent.futures import ThreadPoolExecutor
 
-class IMDBDataset(Dataset):
-    def __init__(self, reviews, targets, args):
-        self.reviews = reviews
-        self.target = targets
+# ============ Helper functions for parallel tokenization ============
+def tokenize_text(text, 
+                    tokenizer: DistilBertTokenizer, 
+                    args):
+    """Function to tokenize a single review."""
+    return tokenizer(
+        text,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        return_token_type_ids=False,
+        max_length=args.max_seq_length,
+    )
+
+def tokenize_texts(texts: List[str], 
+                    tokenizer: DistilBertTokenizer, 
+                    args):
+    """ 
+    Multi-threaded tokenization of texts.
+    
+    Args:
+    - texts: List of review texts to tokenize.
+    - tokenizer: Tokenizer object to use for encoding.
+    
+    Returns:
+    - encodings: List of tokenized encodings for the texts. Each encoding will
+    be a dictionary with keys 'input_ids' and 'attention_mask'.
+    """
+    with ThreadPoolExecutor() as executor:
+        encodings = list(tqdm(
+            executor.map(lambda x: tokenize_text(x, 
+                                tokenizer = tokenizer, 
+                                args= args), 
+                        texts),
+            desc="Tokenizing texts",
+            total=len(texts),
+        ))
+        
+    return encodings
+# =============================================================================     
+        
+class SimilarityDataset(Dataset):
+    def __init__(self, dataset: Dataset, 
+                    split: str, 
+                    args, 
+                    text_col: str,
+                    label_col: str):
+        """ 
+        Expects to be initialized with the stanfordnlp/imdb dataset or google/civil_comments dataset. 
+        
+        Args:
+        - dataset: Dataset object from Huggingface Datasets library.
+        - split: Name of the split to use. Options are 'train', 'validation', 'test'.
+        - args: Namespace object with training hyperparameters.
+        - text_col: Name of the column containing the text data.
+        - label_col: Name of the column containing the label data.
+        """
+        self.limit_data = args.limit_data  # limit data for testing/ faster performance 
+        try:
+            self.texts = dataset[text_col][:self.limit_data]
+            self.targets = dataset[label_col][:self.limit_data]
+        except KeyError:
+            raise ValueError(f"IMDB Dataset must contain {text_col} and {label_col} keys.")
         self.p = args
         self.max_length = args.max_seq_length
-
+        self.split = split
+        self.treatment_phrase = args.treatment_phrase  # treatment word for causal regularization
+        
+        # ========= Tokenizer initialization =========
         self.tokenizer = None
         if args.pretrained_model_name in ['bert-base-uncased']:
             self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
@@ -33,57 +96,129 @@ class IMDBDataset(Dataset):
         else:
             raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
         
+        
+        # ======== Create treated and control counterfactuals for each example ========
+        def treat_if_untreated(text: str, 
+                            treatment_phrase: str, 
+                            append_where: str = 'start'):
+            """
+            If the treatment_phrase is not present in the text, append it as 
+            specified by append_where. Produces treatment counterfactuals.
+            
+            Args:
+            - text: The text to treat.
+            - treatment_phrase: The phrase to append to the text.
+            - append_where: Where to append the treatment phrase. Options are 'end' or 'start'.
+            
+            Returns:
+            - treated_text: The treated text. If the text already contains the phrase, 
+            the text is returned unchanged.
+            """
+            if treatment_phrase in text:
+                return text
+            if append_where == 'end':
+                return text + ' ' + treatment_phrase
+            elif append_where == 'start':
+                return treatment_phrase + ' ' + text
+            else:
+                raise ValueError(f"append_where must be 'start' or 'end'. Got {append_where}.")
+            
+        def mask_if_present(text: str, 
+                            treatment_phrase: str, 
+                            tokenizer: DistilBertTokenizer):
+            """
+            Mask the treatment phrase in the text if it exists. Produces control 
+            counterfactuals. 
+            
+            Args:
+            - text: The text to mask.
+            - treatment_phrase: The phrase to mask.
+            
+            Returns:
+            - control_text: The text with the treatment phrase replaced by '[MASK]'.
+            """
+            mask_token = tokenizer.mask_token
+            return text.replace(treatment_phrase, mask_token) 
+        
+        if split == 'train':
+            print("Creating treated and control counterfactuals...")
+            self.texts_treated = [treat_if_untreated(text, self.treatment_phrase) for text in self.texts]
+            self.texts_control = [mask_if_present(text, self.treatment_phrase, self.tokenizer) for text in self.texts]       
+        # =============================================================================
+        
+        # ====== Produce encodings in parallel and cache =======
+        print("Tokenizing texts for real, treated, and control counterfactuals...")
+        self.encodings_real = tokenize_texts(texts = self.texts, 
+                                        tokenizer = self.tokenizer, 
+                                        args = args)
+        if split == 'train':
+            self.encodings_treated = tokenize_texts(texts = self.texts_treated,
+                                                    tokenizer = self.tokenizer,
+                                                    args = args)
+            self.encodings_control = tokenize_texts(texts = self.texts_control,
+                                                    tokenizer = self.tokenizer,
+                                                    args = args)
+
+        
     def __len__(self):
-        return len(self.reviews)
+        return len(self.texts)
 
-    def __getitem__(self, idx):
-        review = str(self.reviews[idx])
-        target = self.target[idx]
+    def get_idx(self, idx):
+        text = str(self.texts[idx])
+        treated_text = str(self.texts_treated[idx])
+        control_text = str(self.texts_control[idx])
+        target = self.targets[idx]
 
-        encoding = self.tokenizer(review, return_tensors='pt', padding=True, truncation=True, return_token_type_ids=False, max_length=self.max_length)
+        encoding_real = self.encodings_real[idx]
 
+        encoding_treated = None
+        encoding_control = None
+        if self.split == 'train':
+            encoding_treated = self.encodings_treated[idx]
+            encoding_control = self.encodings_control[idx]
+            
+            
+        
         output = {
-            'review_text': review,
+            'text': text,
+            'treated_text': treated_text,
+            'control_text': control_text,
             'target': target,
-            'input_ids': encoding['input_ids'],
-            'attention_mask': encoding['attention_mask']
+            'input_ids_real': encoding_real['input_ids'],
+            'input_ids_treated': encoding_treated.get('input_ids', None),
+            'input_ids_control': encoding_control.get('input_ids', None),
+            'attention_mask_real': encoding_real['attention_mask'],
+            'attention_mask_treated': encoding_treated.get('attention_mask', None),
+            'attention_mask_control': encoding_control.get('attention_mask', None)
         }
 
         return output
     
-class CivilCommentsDataset(Dataset):
-    def __init__(self, text, toxicity, args):
-        self.text = text
-        self.toxicity = toxicity
-        self.p = args
-        self.max_length = args.max_seq_length
-
-        self.tokenizer = None
-        if args.pretrained_model_name in ['bert-base-uncased']:
-            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
-        elif args.pretrained_model_name == 'msmarco-distilbert-base-v3':
-            # Tokenizer initialization is not necessary since SentenceTransformer handles it
-            self.tokenizer = DistilBertTokenizer.from_pretrained(f"sentence-transformers/{args.pretrained_model_name}")
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return [self[ii] for ii in range(*key.indices(len(self)))]
+        elif isinstance(key, int):
+            if key < 0: # Handle negative indices
+                key += len(self)
+            if key < 0 or key >= len(self):
+                raise IndexError(f"The index {key} is out of range.")
+            return self.get_idx(idx = key) # get a single example
         else:
-            raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
-        
-    def __len__(self):
-        return len(self.text)
+            raise TypeError(f"Invalid argument type: {type(key)}. Must be int or slice.")
 
-    def __getitem__(self, idx):
-        text = str(self.text[idx])
-        toxicity = self.toxicity[idx]
-
-        encoding = self.tokenizer(text, return_tensors='pt', padding=True, truncation=True, return_token_type_ids=False, max_length=self.max_length)
-
-        output = {
-            'text': text,
-            'toxicity': toxicity,
-            'input_ids': encoding['input_ids'],
-            'attention_mask': encoding['attention_mask']
-        }
-
-        return output
+class IMDBDataset(SimilarityDataset):
+    def __init__(self, 
+                dataset: Dataset, 
+                split: str, 
+                args):
+        super().__init__(dataset, split, args, text_col = 'text', label_col = 'label')
+    
+class CivilCommentsDataset(SimilarityDataset):
+    def __init__(self, 
+                dataset: Dataset,
+                split: str, 
+                args):
+        super().__init__(dataset, split, args, text_col = 'text', label_col = 'toxicity')
 
 class TextAlignDataset(Dataset):
     def __init__(self, dataset, args):
@@ -138,74 +273,3 @@ class TextAlignDataset(Dataset):
                 batched_data[key] = torch.zeros_like(batched_data['input_ids_1'])
 
         return batched_data
-
-
-def load_acl_data(citation_file = 'acl_full_citations.parquet', 
-        pub_info_file = 'acl-publication-info.74k.v2.parquet', 
-        row_limit = None):
-    data_directory = os.path.join(CAUSALIGN_DIR, 'data')
-
-    print(f"Loading data from {data_directory}")
-    df_cit = pd.read_parquet(os.path.join(data_directory, citation_file))
-    df_pub = pd.read_parquet(os.path.join(data_directory, pub_info_file))
-
-    dataset = create_triplets(df_cit, df_pub)
-    
-    if row_limit:
-        dataset = dataset[:row_limit]
-
-    return dataset
-
-def create_triplets(df_cit, df_pub):
-    # only keep data for ACL papers (otherwise merge will fail)
-    df_cit_acl = df_cit[(df_cit['is_citedpaperid_acl'] == True) & (df_cit['is_citingpaperid_acl'] == True)].copy()
-
-    # create a dictionary of citing papers as keys and all their cited papers as values
-    citing_to_cited = df_cit_acl.groupby(CITING_ID_COL)[CITED_ID_COL].apply(list).to_dict()
-    # get the list of all papers in the corpus
-    all_corpus_papers = df_pub[CORPUS_ID_COL].unique()
-    print("Creating negative labels...")
-    tqdm.pandas(desc="Sampling negative examples...")
-    df_cit_acl[NEGATIVE_ID_COL] = df_cit_acl.progress_apply(
-                                        lambda x: add_negative_label(x, 
-                                            citing_to_cited = citing_to_cited,
-                                            all_papers = all_corpus_papers), 
-                                        axis = 1)
-    merged = df_cit_acl[[CITING_ID_COL, CITED_ID_COL, NEGATIVE_ID_COL]].merge( #get the citing abstract
-        df_pub[[CORPUS_ID_COL, 'abstract']].rename(columns={'abstract': 'citing_abstract'}),
-        left_on=CITING_ID_COL, right_on=CORPUS_ID_COL, how='inner'
-    )
-    merged = merged.merge(  # get the cited abstract
-        df_pub[[CORPUS_ID_COL, 'abstract']].rename(columns={'abstract': 'cited_abstract'}),
-        left_on=CITED_ID_COL, right_on=CORPUS_ID_COL, how='inner'
-    )
-    merged = merged.merge(  # get the negative abstract
-        df_pub[[CORPUS_ID_COL, 'abstract']].rename(columns={'abstract': 'negative_abstract'}),
-        left_on=NEGATIVE_ID_COL, right_on=CORPUS_ID_COL, how='inner'
-    )        
-    abstract_cols = ['citing_abstract', 'cited_abstract', 'negative_abstract']
-    merged = merged[abstract_cols]
-    merged = merged.dropna()
-    triplets = list(merged.itertuples(index=False, name=None))
-
-    return triplets
-
-
-def add_negative_label(row,
-        citing_to_cited: Dict[str, List], 
-        all_papers: List[str]) -> pd.DataFrame:
-    """
-    Add negative examples to the positive examples. For each positive example, sample
-    1 negative example by randomly selecting a paper from the corpus, 
-    and confirming that the paper was not cited by `citingpaperid` from 
-    the positive example.
-    """
-    # sample num_neg_samples negative examples for each positive example
-    cited_papers = citing_to_cited.get(row['citingpaperid'], [])
-    if not cited_papers:
-        raise ValueError(f"No cited papers for {row['citingpaperid']}. This is unexpected.")
-    neg_cited_paper = np.random.choice(all_papers)
-    while neg_cited_paper in cited_papers:   # resample if we sampled a paper that was cited by the citing paper
-        neg_cited_paper = np.random.choice(all_papers)
-                
-    return neg_cited_paper

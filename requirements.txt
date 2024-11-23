@@ -6,3 +6,4 @@ pyarrow>=17
 fastparquet>=2024
 python-dotenv
 wandb
+datasets
