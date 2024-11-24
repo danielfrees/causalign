@@ -1,6 +1,3 @@
-# Don't push the huge data 
-data/
-
 # mac icon placement metadata 
 .DS_Store
 
