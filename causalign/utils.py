@@ -17,7 +17,7 @@ def save_model(model, optimizer, args, config, filepath):
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
 
-def get_training_args(regime: str):
+def get_default_training_args(regime: str):
     """
     Parse command line arguments.
     
@@ -40,27 +40,29 @@ def get_training_args(regime: str):
         # logging 
         parser.add_argument("--log_every", type=int, default=5, help='Log training progress every n batches') # TODO: Revert to >200 for faster training on big dataset
         # limit data for testing 
-        parser.add_argument("--limit_data", type=int, default=500, help='Number of rows to include from the dataset.') #TODO: revert to full data
+        parser.add_argument("--limit_data", type=int, default=0, help='Number of rows to include from the dataset. Values <=0 do no subsetting.') #TODO: revert to full data
         parser.add_argument("--train_regime", type=str, default=regime, choices=['base', 'itvreg'])
         if regime == 'base_sim' or regime == 'base_sent':
-            parser.add_argument("--pretrained_model_name", type=str, default="msmarco-distilbert-base-v3") # type=str, default="bert-base-uncased")
+            parser.add_argument("--pretrained_model_name", type=str, default="sentence-transformers/msmarco-distilbert-base-v3") # type=str, default="bert-base-uncased")
         else:
             raise ValueError(f"train_regime {regime} not recognized. Select one of 'base_sim', 'base_sent'")  
         
         # ======= data settings =======
         if regime == 'base_sim':
-            print("Setting up hyperparameters for sentence similarity task (ACL)...")
+            print("Selecting  dataset for sentence similarity task (ACL)...")
             parser.add_argument("--acl_citation_filename", type=str, default="acl_full_citations.parquet")
             parser.add_argument("--acl_pub_info_filename", type=str, default="acl-publication-info.74k.v2.parquet")
             # parser.add_argument("--nli_filename", type=str, default="data/nli_for_simcse.csv") # general NLI case, code for this if you modify input data
         elif regime == 'base_sent':
-            print("Setting up hyperparameters for sentiment task (IMDB, CivilComments)...")
-            pass # default data is loaded via huggingface. See dataset/utils.py for details for the IMDB, CivilComments data loading.
+            print("Selecting dataset for sentiment task (IMDB or CivilComments)...")
+            # default data is loaded via huggingface. See dataset/utils.py for details for the IMDB, CivilComments data loading.
+            parser.add_argument("--dataset", type=str, default="imdb") # choices=['imdb', 'civilcomments']
         
         # ======= specific hyperparameters =======
         parser.add_argument("--max_seq_length", type=int, default=100, help='Truncate texts to this number of tokens. Useful for faster training.')
 
         if regime == 'base_sim':
+            print("Setting hyperparameters for sentence similarity task...")
             parser.add_argument('--tau', type=float, default=0.1, help='Temperature parameter for contrastive loss')
             parser.add_argument("--curriculum_training", action='store_true')
             parser.add_argument("--lambda_", type=float, default=1.0, help='lambda for pacing function')
@@ -73,11 +75,17 @@ def get_training_args(regime: str):
             parser.add_argument("--lambda_entailment", type=float, default=0.25, help='Weight for entailment BCE loss')
             parser.add_argument("--lambda_contradiction", type=float, default=0.25, help='Weight for contradiction BCE loss')
         elif regime == 'base_sent':
+            print("Setting hyperparameters for sentiment task...")
             # select the treatment word. Should be chosen heuristically s.t. it has meaning on the output.
             # The treatment word is the word upon which we will regularize the model 
             # to match riesz estimated word-level causal effects.
             # phrases may work, but not currently tested
             parser.add_argument("--treatment_phrase", type = str, default = "love", help = "The treatment word for the causal regularization regime.")
+            parser.add_argument("--lambda_bce", type=float, default=1.0, help="Weight for the BCE loss term.")
+            parser.add_argument("--lambda_reg", type=float, default=1.0, help="Weight for the regularization loss term.")
+            parser.add_argument("--lambda_riesz", type=float, default=1.0, help="Weight for the Riesz loss term.")
+            parser.add_argument("--running_ate", action='store_true', default=False, help="Whether to track a running average or batch average to compute the Riesz regression ATE.")
+            parser.add_argument("--estimate_targets_for_ate", action='store_true', default=False, help="Whether to use estimated sentiment probabilities or true targets to compute the Riesz regression ATE.")
     else: 
         raise ValueError(f"regime {regime} not recognized. Select one of 'base_sim', 'base_sent'")
     

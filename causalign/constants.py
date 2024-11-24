@@ -11,6 +11,8 @@ CITED_ID_COL = "citedpaperid"
 NEGATIVE_ID_COL = "negativepaperid"
 CORPUS_ID_COL = "corpus_paper_id"
 
+ACL_DATA_DIR = "acl_data"
+
 DEVICE = torch.device('cpu')
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda')

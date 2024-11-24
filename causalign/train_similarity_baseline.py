@@ -29,11 +29,11 @@ from types import SimpleNamespace
 import uuid
 
 
-from datasets.generators import TextAlignDataset
+from data.generators import TextAlignDataset
 from datasets.utils import load_acl_data
 from causalign.modules.sim_bert import SimDistilBERT
 from causalign.optim.sim_cse import ContrastiveLearningLoss
-from causalign.utils import save_model, get_training_args, seed_everything
+from causalign.utils import save_model, get_default_training_args, seed_everything
 from causalign.constants import DEVICE
 
 
@@ -207,7 +207,7 @@ def train_baseline(args):
 
 
 if __name__ == '__main__':
-    args = get_training_args(regime='base')
+    args = get_default_training_args(regime='base')
     args.output_model_path = f'params-{args.train_regime}-{args.epochs}-{args.lr}-{args.tau}-contrastive-baseline.pt'  # Save path.
     seed_everything(args.seed)
     train_baseline(args)
