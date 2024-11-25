@@ -121,7 +121,7 @@ class EarlyStopper:
 
         self.max_val_acc = -1.0
 
-    def lowest_val_acc(self, val_acc: float):
+    def highest_val_acc(self, val_acc: float):
         if val_acc > self.max_val_acc:
             self.max_val_acc = val_acc
             self.counter = 0
