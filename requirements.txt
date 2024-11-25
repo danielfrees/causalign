@@ -1,9 +1,12 @@
 pandas>=2.2.3
 torch>=2.4.1
 numpy>=2.1.2
+scikit-learn
 transformers>=4.45.2
 pyarrow>=17
 fastparquet>=2024
 python-dotenv
 wandb
 datasets
+tqdm
+matplotlib
