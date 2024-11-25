@@ -8,7 +8,6 @@ def save_model(model, optimizer, args, config, filepath):
         'model': model.state_dict(),
         'optim': optimizer.state_dict(),
         'args': args,
-        'model_config': config,
         'system_rng': random.getstate(),
         'numpy_rng': np.random.get_state(),
         'torch_rng': torch.random.get_rng_state(),
@@ -16,6 +15,9 @@ def save_model(model, optimizer, args, config, filepath):
 
     torch.save(save_info, filepath)
     print(f"save the model to {filepath}")
+
+def load_model_inference(filepath):
+    return torch.load(filepath, weights_only=True)
 
 def get_default_training_args(regime: str):
     """
@@ -42,6 +44,9 @@ def get_default_training_args(regime: str):
         # limit data for testing 
         parser.add_argument("--limit_data", type=int, default=0, help='Number of rows to include from the dataset. Values <=0 do no subsetting.') #TODO: revert to full data
         parser.add_argument("--train_regime", type=str, default=regime, choices=['base', 'itvreg'])
+        # early stopping
+        parser.add_argument("--early_stop_patience", type=int, default=5, help='Number of epochs allowed with increased validation accuracy before stopping early.') #TODO: revert to full data
+        parser.add_argument("--early_stop_delta", type=float, default=0.1, help='Amount of increased validation accuracy to tolerate in early stopping criterion.')
         if regime == 'base_sim' or regime == 'base_sent':
             parser.add_argument("--pretrained_model_name", type=str, default="sentence-transformers/msmarco-distilbert-base-v3") # type=str, default="bert-base-uncased")
         else:
@@ -104,3 +109,31 @@ def seed_everything(seed=11711):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+
+class EarlyStopper:
+    def __init__(self, 
+                 patience: int, 
+                 delta: float):
+        self.count = 0
+        self.patience = patience
+
+        self.delta = delta
+
+        self.max_val_acc = -1.0
+
+    def highest_val_acc(self, val_acc: float):
+        if val_acc > self.max_val_acc:
+            self.max_val_acc = val_acc
+            self.counter = 0
+            return True
+        
+        return False
+
+    def early_stop(self, val_acc: float):
+        if val_acc < (self.max_val_acc - self.delta):
+            self.counter += 1
+
+            if self.counter >= self.patience:
+                return True
+        
+        return False
