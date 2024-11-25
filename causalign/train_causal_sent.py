@@ -210,7 +210,7 @@ def train_causal_sent(args):
         print(f"Epoch {epoch + 1}/{epochs} Validation Accuracy: {val_acc:.4f}, F1: {val_f1:.4f}")  
         
         # TODO: add early stopping and model checkpointing
-        if early_stopper.lowest_val_acc(val_acc):
+        if early_stopper.highest_val_acc(val_acc):
             save_model(model, optimizer, args, f"out/{out_dir}/best_model.pt")
         if early_stopper.early_stop(val_acc):
             break
@@ -288,6 +288,18 @@ def train_causal_sent(args):
                                           "val_acc": val_acc, "val_f1": val_f1,
                                           "test_acc": test_acc, "test_f1": test_f1})
     final_metrics.to_csv(f"out/{out_dir}/final_metrics.csv")
+
+    wandb.log({
+        "Final Train Accuracy": train_acc,
+        "Final Train F1": train_f1,
+        "Final Val Accuracy": val_acc,
+        "Final Val F1": val_f1,
+        "Final Test Accuracy": test_acc,
+        "Final Test F1": test_f1
+    })
+
+    return
+
         
 if __name__ == "__main__":
     args = get_default_training_args("base_sent")
