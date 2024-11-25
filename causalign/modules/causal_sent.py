@@ -1,18 +1,104 @@
+from transformers import DistilBertModel, LlamaModel
 import torch
-from transformers import DistilBertModel
-
 from causalign.modules.causal_sent_heads import RieszHead, SentimentHead
+from causalign.constants import SUPPORTED_BACKBONES_LIST, HF_TOKEN
+from typing import Union
+import warnings
+
 
 class CausalSent(torch.nn.Module):
     def __init__(self, 
-                bert_hidden_size: int = 768, 
-                pretrained_model_name: str = 'sentence-transformers/msmarco-distilbert-base-v3'):
-        super().__init__()
-        self.bert_hidden_size= bert_hidden_size
+                pretrained_model_name: str,
+                sentiment_head_type = 'fcn', # 'fcn', 'linear', 'conv'
+                riesz_head_type = 'fcn', # 'fcn', 'linear', 'conv'
+                ):
+        """ 
+        Causal Sentence Embedding Model.
         
-        self.bert = DistilBertModel.from_pretrained(pretrained_model_name)
-        self.riesz = RieszHead(bert_hidden_size)
-        self.sentiment = SentimentHead(hidden_size=64, bert_hidden_size=bert_hidden_size, multilayer=False, probs=False)
+        Parameters:
+        - pretrained_model_name: str
+            Pretrained model name for the backbone model.
+        - sentiment_head_type: str, default='fcn'
+            Type of sentiment head to use. Options: 'fcn', 'linear', 'conv'
+        - riesz_head_type: str, default='fcn'
+            Type of Riesz head to use. Options: 'fcn', 'linear', 'conv'
+        """
+        
+        super().__init__()
+        
+        # =========== Load backbone (DistilBERT or LLaMA) =================
+        if not pretrained_model_name in SUPPORTED_BACKBONES_LIST:
+            warnings.warn(f"[WARNING] Unsupported/tested model name: {pretrained_model_name}. ")
+            print(f"Supported models: {SUPPORTED_BACKBONES_LIST}")
+            
+        if "bert" in pretrained_model_name:
+            self.backbone = DistilBertModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
+            backbone_type = "DistilBERT"
+        elif "llama" in pretrained_model_name:
+            # Example: Uncomment below if LLaMA 3.1 8B is desired
+            self.backbone = LlamaModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
+            backbone_type = "LLaMA"
+        else:
+            raise ValueError(f"[ERROR] Unsupported model name: {pretrained_model_name}. "
+                            f"Expected 'bert' or 'llama' in the name.")
+            
+        backbone_hidden_size = self.backbone.config.hidden_size
+        self.backbone_hidden_size = backbone_hidden_size
+
+        # Freeze backbone parameters initially
+        for param in self.backbone.parameters():
+            param.requires_grad = False
+
+        # Print backbone model information
+        print("\n" + "=" * 50)
+        print(f"Loaded Backbone Model: {backbone_type}")
+        print(f"Pretrained Model Name: {pretrained_model_name}")
+        print(f"Backbone Hidden Size: {backbone_hidden_size}")
+        print("=" * 50 + "\n")
+
+        # Riesz and Sentiment Heads
+        self.riesz = RieszHead(backbone_hidden_size = backbone_hidden_size, 
+                            head_type = riesz_head_type)
+        for param in self.riesz.parameters():
+            param.requires_grad = True
+
+        self.sentiment = SentimentHead(hidden_size=64, backbone_hidden_size=backbone_hidden_size, 
+                                head_type = sentiment_head_type, 
+                                probs=False)
+        for param in self.sentiment.parameters():
+            param.requires_grad = True
+        
+    def unfreeze_backbone(self, num_layers: Union[str, int] = 'all'):
+        """ 
+        Iteratively unfreeze backbone layers.
+        
+        Parameters:
+        - num_layers: Union[str, int], default='all'
+            Number of backbone layers to unfreeze.
+            If 'all', unfreeze all layers. 
+        """
+        print("\n" + "=" * 50)
+        print("Unfreezing Backbone Layers:")
+        if num_layers == 'all':
+            for param in self.backbone.parameters():
+                param.requires_grad = True
+            print("  > All layers have been unfrozen.")
+        else:
+            # Unfreeze the last `num_layers` layers
+            assert isinstance(num_layers, int), "num_layers must be 'all' or an integer."
+            layer_list = list(self.backbone.encoder.layer)  # List of layers
+            layers_to_unfreeze = layer_list[-num_layers:]
+
+            for layer in layers_to_unfreeze:
+                for param in layer.parameters():
+                    param.requires_grad = True
+            print(f"  > Last {num_layers} backbone layers have been unfrozen.")
+
+        # Verbose unfreezing output
+        for name, param in self.backbone.named_parameters():
+            if param.requires_grad:
+                print(f"    - Unfrozen: {name}")
+        print("=" * 50 + "\n")
 
     def forward(self,
                 input_ids_real, 
@@ -23,34 +109,43 @@ class CausalSent(torch.nn.Module):
                 attention_mask_control):
         
         if self.training:
-            bert_output_real = self.bert(input_ids_real, attention_mask_real)
-            bert_output_treated = self.bert(input_ids_treated, attention_mask_treated)
-            bert_output_control = self.bert(input_ids_control, attention_mask_control)
+            backbone_output_real = self.backbone(input_ids_real, attention_mask=attention_mask_real)
+            backbone_output_treated = self.backbone(input_ids_treated, attention_mask=attention_mask_treated)
+            backbone_output_control = self.backbone(input_ids_control, attention_mask=attention_mask_control)
 
-            # Use BERT to produce `last_hidden_state`embedding
-            hidden_state_real = bert_output_real.last_hidden_state
-            hidden_state_treated = bert_output_treated.last_hidden_state
-            hidden_state_control = bert_output_control.last_hidden_state
+            # Process outputs for DistilBERT or LLaMA
+            if isinstance(self.backbone, DistilBertModel):
+                embedding_real = backbone_output_real.last_hidden_state[:, 0, :]  # CLS token embedding
+                embedding_treated = backbone_output_treated.last_hidden_state[:, 0, :]
+                embedding_control = backbone_output_control.last_hidden_state[:, 0, :]
+            elif isinstance(self.backbone, LlamaModel):
+                embedding_real = backbone_output_real.last_hidden_state[:, -1, :]  # Last token embedding
+                embedding_treated = backbone_output_treated.last_hidden_state[:, -1, :]
+                embedding_control = backbone_output_control.last_hidden_state[:, -1, :]
+            else:
+                raise ValueError("[ERROR] Unsupported backbone model.")
 
-            # Use CLS token representation (first token of the sequence)
-            # captures overall sentence information 
-            cls_token_real = hidden_state_real[:, 0, :]
-            cls_token_treated = hidden_state_treated[:, 0, :]
-            cls_token_control = hidden_state_control[:, 0, :]
+            # Pass embeddings through Riesz and Sentiment heads
+            riesz_output_real = self.riesz(embedding_real)
+            riesz_output_treated = self.riesz(embedding_treated)
+            riesz_output_control = self.riesz(embedding_control)
 
-            riesz_output_real = self.riesz(bert_embedding = cls_token_real)
-            riesz_output_treated = self.riesz(bert_embedding = cls_token_treated)
-            riesz_output_control = self.riesz(bert_embedding = cls_token_control)
-
-            sentiment_output_real = self.sentiment(bert_embedding = cls_token_real)
-            sentiment_output_treated = self.sentiment(bert_embedding = cls_token_treated)
-            sentiment_output_control = self.sentiment(bert_embedding = cls_token_control)
+            sentiment_output_real = self.sentiment(embedding_real)
+            sentiment_output_treated = self.sentiment(embedding_treated)
+            sentiment_output_control = self.sentiment(embedding_control)
 
             return (sentiment_output_real, sentiment_output_treated, sentiment_output_control, 
                     riesz_output_real, riesz_output_treated, riesz_output_control)
         else:
-            bert_output_real = self.bert(input_ids_real, attention_mask_real)
-            cls_token_real = bert_output_real.last_hidden_state[:, 0, :]
-            sentiment_output_real = self.sentiment(bert_embedding = cls_token_real)
+            backbone_output_real = self.backbone(input_ids_real, attention_mask=attention_mask_real)
+            
+            if isinstance(self.backbone, DistilBertModel):
+                embedding_real = backbone_output_real.last_hidden_state[:, 0, :]  # CLS token embedding
+            elif isinstance(self.backbone, LlamaModel):
+                embedding_real = backbone_output_real.last_hidden_state[:, -1, :]  # Last token embedding
+            else:
+                raise ValueError("[ERROR] Unsupported backbone model.")
+            
+            sentiment_output_real = self.sentiment(embedding_real)
+        
             return sentiment_output_real
-

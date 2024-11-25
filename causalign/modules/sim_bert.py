@@ -17,7 +17,7 @@ class SimDistilBERT(nn.Module):
     """
     def __init__(self,
                 args,
-                pretrained_model_name='sentence-transformers/msmarco-distilbert-base-v3', 
+                pretrained_model_name='sentence-transformers/msmarco-distilbert-base-v4', 
                 hidden_size=768,
                 device=DEVICE):
         super(SimDistilBERT, self).__init__()

@@ -1,6 +1,7 @@
 #!/bin/bash
 
 python train_causal_sent.py \
+    --pretrained_model_name meta-llama/Llama-3.1-8B \
     --limit_data 500 \
     --max_seq_length 150 \
     --lr 5e-5 \

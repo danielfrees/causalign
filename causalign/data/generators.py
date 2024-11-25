@@ -11,11 +11,13 @@ TOP_DIR = os.path.abspath(os.path.join(os.getcwd(), '..'))
 if TOP_DIR not in sys.path:
     sys.path.insert(0, TOP_DIR)
 from tqdm.auto import tqdm
-from typing import  List
+from typing import  List, Union
 import torch
 from torch.utils.data import Dataset
 from transformers import DistilBertTokenizer, AutoTokenizer
 import concurrent 
+import warnings 
+from causalign.constants import HF_TOKEN
 
 # ============ Helper functions for parallel tokenization ============
 def tokenize_text(text, 
@@ -79,13 +81,27 @@ class SimilarityDataset(Dataset):
         self.limit_data = args.limit_data  # limit data for testing/ faster performance 
         if self.limit_data > 0:
             print(f"Limiting data to {self.limit_data} rows.")
-            sampled_indices = np.random.choice(len(dataset), self.limit_data, replace=False)
-            dataset = dataset.select(sampled_indices)
+            if len(dataset) < self.limit_data:
+                warnings.warn(f"Dataset has only {len(dataset)} rows. Cannot limit to {self.limit_data}. Using full dataset.")
+                sampled_indices = dataset
+            else:
+                sampled_indices = np.random.choice(len(dataset), self.limit_data, replace=False)
+                dataset = dataset.select(sampled_indices)
         try:
-            self.texts = dataset[text_col]
-            self.targets = dataset[label_col]
+            valid_data = [(text, label) for text, label in zip(dataset[text_col], dataset[label_col]) if text is not None]
+            self.texts, self.targets = zip(*valid_data) if valid_data else ([], [])
+
+            num_dropped = len(dataset[text_col]) - len(self.texts)
+
+            if num_dropped > 0:
+                warnings.warn(
+                    f"Dataset {split}: Dropped {num_dropped} None or invalid texts. "
+                    f"{len(self.texts)} valid texts remain."
+                )
         except KeyError:
             raise ValueError(f"IMDB Dataset must contain {text_col} and {label_col} keys.")
+        except TypeError:
+            raise ValueError(f"Dataset contains invalid entries in column {text_col}.")
         self.p = args
         self.max_length = args.max_seq_length
         self.split = split
@@ -93,11 +109,14 @@ class SimilarityDataset(Dataset):
         
         # ========= Tokenizer initialization =========
         self.tokenizer = None
-        if args.pretrained_model_name in ['bert-base-uncased']:
-            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name)
+        if args.pretrained_model_name in ['bert-base-uncased', 'meta-llama/Llama-3.1-8B']:
+            self.tokenizer = AutoTokenizer.from_pretrained(args.pretrained_model_name, token = HF_TOKEN)
+            if 'llama' in args.pretrained_model_name:
+                self.tokenizer.pad_token = self.tokenizer.eos_token  #llama doesnt have a pad token
+                print(f"Set llama pad token: {self.tokenizer.pad_token}")     
         elif args.pretrained_model_name == "sentence-transformers/msmarco-distilbert-base-v3":
             # Tokenizer initialization is not necessary since SentenceTransformer handles it
-            self.tokenizer = DistilBertTokenizer.from_pretrained(args.pretrained_model_name)
+            self.tokenizer = DistilBertTokenizer.from_pretrained(args.pretrained_model_name, token = HF_TOKEN)                
         else:
             raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
         
@@ -139,7 +158,7 @@ class SimilarityDataset(Dataset):
         def mask_if_present(
                 text: str, 
                 treatment_phrase: str, 
-                tokenizer: DistilBertTokenizer, 
+                tokenizer: Union[DistilBertTokenizer, AutoTokenizer], 
                 ignore_case: bool = True):
             """
             Mask the treatment phrase in the text if it exists. Produces control 
@@ -154,7 +173,23 @@ class SimilarityDataset(Dataset):
             Returns:
             - control_text: The text with the treatment phrase replaced by '[MASK]'.
             """
-            mask_token = tokenizer.mask_token
+            mask_token = None
+            print(f"Tokenizer type: {type(tokenizer)}")
+            if isinstance(tokenizer, DistilBertTokenizer):
+                mask_token = tokenizer.mask_token
+                print(f"Tokenizer mask token: {mask_token}")
+            else: 
+                # llama is weird, need to use eos_token for mask
+                if 'llama' in self.p.pretrained_model_name:
+                    mask_token = tokenizer.pad_token
+                    print(f"Tokenizer mask token: {mask_token}")
+                else:
+                    raise ValueError("Mask token failed. Expected DistilBert or llama Autotokenizer.")
+                # TODO: handle the above more elegantly
+                
+            if not mask_token:
+                raise ValueError("Mask token failed. .eos_token or .mask_token not found in tokenizer.")
+            
             if ignore_case:
                 import re
                 pattern = re.compile(re.escape(treatment_phrase), re.IGNORECASE)

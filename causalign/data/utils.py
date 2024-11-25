@@ -4,7 +4,6 @@ import os
 import sys
 from tqdm.auto import tqdm
 from typing import Dict, List, Tuple
-import importlib
 from datasets import Dataset, load_dataset
 from causalign.constants import CAUSALIGN_DIR, CITING_ID_COL, CITED_ID_COL, NEGATIVE_ID_COL, CORPUS_ID_COL, ACL_DATA_DIR
 
@@ -85,7 +84,7 @@ def load_imdb_data(split: str,
     imdb_ds = load_dataset(imdb_data_source, split = split)
     return imdb_ds
 
-def load_civil_commments_data(split: str,
+def load_civil_comments_data(split: str,
                 civil_comments_data_source: str = "google/civil_comments")->Dataset:
     civil_ds = load_dataset(civil_comments_data_source, split=split)
     return civil_ds

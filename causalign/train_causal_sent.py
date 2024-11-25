@@ -11,14 +11,16 @@ if TOP_DIR not in sys.path:
 import torch
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score
-from causalign.data.utils import load_imdb_data, load_civil_commments_data
+from causalign.data.utils import load_imdb_data, load_civil_comments_data
 from causalign.data.generators import IMDBDataset, CivilCommentsDataset
 from causalign.modules.causal_sent import CausalSent
 from causalign.data.generators import SimilarityDataset
-from causalign.utils import save_model, load_model_inference, get_default_training_args, seed_everything, EarlyStopper  # TODO: use save_model
+from causalign.utils import (save_model, load_model_inference, 
+                    get_default_sent_training_args, seed_everything, 
+                    EarlyStopper, initialize_database, save_arguments_to_db,
+                    save_metrics_to_db, save_model_weights_to_db, save_outputs_to_db)
 import wandb
 import pandas as pd
-
 
 
 def train_causal_sent(args):
@@ -32,13 +34,20 @@ def train_causal_sent(args):
     print("Running CausalSent Training with the following arguments:")
     for arg, value in vars(args).items():
         print(f"{arg}: {value}")
-    out_dir = '_'.join(arg + '_' + value for arg, value in vars(args).items())
     print("="*50 + "\n")
+    
+    # ====== Initialize Experiment Tracking DB ======
+    initialize_database()
+    experiment_id = save_arguments_to_db(args)
     
     # =========== Load Data ==============
     if args.dataset == "imdb":
         imdb_train_original = load_imdb_data(split = "train")
-        imdb_train, imdb_val = imdb_train_original.train_test_split(test_size=0.2)
+        imdb_train_splits = imdb_train_original.train_test_split(test_size=0.2)
+        imdb_train = imdb_train_splits["train"]
+        imdb_val = imdb_train_splits["test"]
+        
+        
 
         imdb_test = load_imdb_data(split = "test")
 
@@ -55,9 +64,9 @@ def train_causal_sent(args):
         ds_val = imdb_ds_val
         ds_test = imdb_ds_test
     else: 
-        civil_train = load_civil_commments_data(split = "train")
-        civil_val = load_civil_commments_data(split = "validation")
-        civil_test = load_civil_commments_data(split = "test")
+        civil_train = load_civil_comments_data(split = "train")
+        civil_val = load_civil_comments_data(split = "validation")
+        civil_test = load_civil_comments_data(split = "test")
         
         civil_ds_train: CivilCommentsDataset = CivilCommentsDataset(civil_train, 
                                                     split="train",
@@ -100,7 +109,14 @@ def train_causal_sent(args):
     test_loader = DataLoader(ds_test, batch_size=batch_size, collate_fn=SimilarityDataset.collate_fn)
 
     # Model, optimizer, and loss
-    model = CausalSent(bert_hidden_size=768, pretrained_model_name=pretrained_model_name).to(device)
+    model = CausalSent(pretrained_model_name=pretrained_model_name, 
+                    sentiment_head_type = args.sentiment_head_type, 
+                    riesz_head_type = args.riesz_head_type).to(device)
+    
+    # TODO: manage unfreezing and iterative unfreezing based on args.unfreeze_backbone
+    
+    # TODO: add in peft LoRA config stuff and pass to model for the backbone
+    
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     bce_loss = torch.nn.BCEWithLogitsLoss()
 
@@ -209,18 +225,20 @@ def train_causal_sent(args):
         wandb.log({"Val Accuracy": val_acc, "Val F1": val_f1, "Epoch": epoch + 1})
         print(f"Epoch {epoch + 1}/{epochs} Validation Accuracy: {val_acc:.4f}, F1: {val_f1:.4f}")  
         
-        # TODO: add early stopping and model checkpointing
+        # ==== Early Stopping and Checkpointing ====
         if early_stopper.highest_val_acc(val_acc):
-            save_model(model, optimizer, args, f"out/{out_dir}/best_model.pt")
+            model_path = os.path.join("out", f"experiment_{experiment_id}", "best_model.pt")
+            save_model(model, optimizer, args, model_path)
+            save_model_weights_to_db(experiment_id, model_path)
         if early_stopper.early_stop(val_acc):
             break
         # ==== end epoch ====
         
-    #TODO: reload best checkpointed model 
-    best_model = load_model_inference(f"out/{out_dir}/best_model.pt")
+    best_model_path = os.path.join("out", f"experiment_{experiment_id}", "best_model.pt")
+    best_model = load_model_inference(best_model_path)
     best_model.eval()
     
-    # compute outputs for full trianing, val, and test sets at the end and save
+    # compute outputs for full training, val, and test sets at the end and save
     # as csvs with verbose model name to out/
     train_targets, train_predictions = [], []
     with torch.no_grad():
@@ -237,7 +255,6 @@ def train_causal_sent(args):
             train_predictions.extend(preds) 
     
     train_output = pd.DataFrame.from_dict({"train_targets": train_targets, "train_predictions": train_predictions})
-    train_output.to_csv(f"out/{out_dir}/train_output.csv")
 
     val_targets, val_predictions = [], []
     with torch.no_grad():
@@ -254,8 +271,6 @@ def train_causal_sent(args):
             val_predictions.extend(preds)
 
     val_output = pd.DataFrame.from_dict({"val_targets": val_targets, "val_predictions": val_predictions})
-    val_output.to_csv(f"out/{out_dir}/val_output.csv")
-
 
     test_targets, test_predictions = [], []
     with torch.no_grad():
@@ -272,7 +287,10 @@ def train_causal_sent(args):
             test_predictions.extend(preds)
 
     test_output = pd.DataFrame.from_dict({"test_targets": test_targets, "test_predictions": test_predictions})
-    test_output.to_csv(f"out/{out_dir}/test_output.csv")
+    
+    save_outputs_to_db(experiment_id, "train", train_targets, train_predictions)
+    save_outputs_to_db(experiment_id, "val", val_targets, val_predictions)
+    save_outputs_to_db(experiment_id, "test", test_targets, test_predictions)
     
     # save final metrics to out/
     train_acc = accuracy_score(train_targets, train_predictions)
@@ -283,25 +301,22 @@ def train_causal_sent(args):
 
     test_acc = accuracy_score(test_targets, test_predictions)
     test_f1 = f1_score(test_targets, test_predictions)
-
-    final_metrics = pd.DataFrame.to_dict({"train_acc": train_acc, "train_f1": train_f1, 
-                                          "val_acc": val_acc, "val_f1": val_f1,
-                                          "test_acc": test_acc, "test_f1": test_f1})
-    final_metrics.to_csv(f"out/{out_dir}/final_metrics.csv")
-
-    wandb.log({
+    
+    final_metrics = {
         "Final Train Accuracy": train_acc,
         "Final Train F1": train_f1,
         "Final Val Accuracy": val_acc,
         "Final Val F1": val_f1,
         "Final Test Accuracy": test_acc,
         "Final Test F1": test_f1
-    })
+    }
+    save_metrics_to_db(experiment_id, final_metrics)
+    wandb.log(final_metrics)
 
     return
 
         
 if __name__ == "__main__":
-    args = get_default_training_args("base_sent")
+    args = get_default_sent_training_args("causal_sent")
     train_causal_sent(args)
     print("Training complete :)")
