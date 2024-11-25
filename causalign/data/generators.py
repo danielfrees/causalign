@@ -17,7 +17,7 @@ from torch.utils.data import Dataset
 from transformers import DistilBertTokenizer, AutoTokenizer
 import concurrent 
 import warnings 
-from causalign.constants import HF_TOKEN
+from causalign.constants import HF_TOKEN, DISTILBERT_SUPPORTED_MODELS
 
 # ============ Helper functions for parallel tokenization ============
 def tokenize_text(text, 
@@ -114,7 +114,7 @@ class SimilarityDataset(Dataset):
             if 'llama' in args.pretrained_model_name:
                 self.tokenizer.pad_token = self.tokenizer.eos_token  #llama doesnt have a pad token
                 print(f"Set llama pad token: {self.tokenizer.pad_token}")     
-        elif args.pretrained_model_name == "sentence-transformers/msmarco-distilbert-base-v3":
+        elif args.pretrained_model_name in DISTILBERT_SUPPORTED_MODELS:
             # Tokenizer initialization is not necessary since SentenceTransformer handles it
             self.tokenizer = DistilBertTokenizer.from_pretrained(args.pretrained_model_name, token = HF_TOKEN)                
         else:

@@ -1,7 +1,11 @@
 #!/bin/bash
+#meta-llama/Llama-3.1-8B
+#sentence-transformers/msmarco-distilbert-base-v4
 
 python train_causal_sent.py \
-    --pretrained_model_name meta-llama/Llama-3.1-8B \
+    --pretrained_model_name sentence-transformers/msmarco-distilbert-base-v4 \
+    --unfreeze_backbone iterative \
+    --epochs 1 \
     --limit_data 500 \
     --max_seq_length 150 \
     --lr 5e-5 \

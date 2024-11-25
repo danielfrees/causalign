@@ -6,21 +6,70 @@ import sqlite3
 import os
 import json
 
-def save_model(model, optimizer, args, config, filepath):
+def save_model(model, optimizer, args, filepath):
+    """
+    Save the model and all necessary components for reloading.
+
+    Parameters:
+    - model: torch.nn.Module
+        The model to save.
+    - optimizer: torch.optim.Optimizer
+        The optimizer to save.
+    - args: argparse.Namespace
+        Training arguments or configuration to save.
+    - filepath: str
+        The path to save the model checkpoint.
+    """
     save_info = {
-        'model': model.state_dict(),
-        'optim': optimizer.state_dict(),
+        'model_state_dict': model.state_dict(),
+        'model_class': model.__class__,
+        'pretrained_model_name': args.pretrained_model_name,  # Save the pretrained model name
+        'sentiment_head_type': args.sentiment_head_type,      # Save the sentiment head type
+        'riesz_head_type': args.riesz_head_type,              # Save the riesz head type
+        'model_config': getattr(model, 'config', None),       # Save model config if available
+        'optimizer_state_dict': optimizer.state_dict(),
         'args': args,
         'system_rng': random.getstate(),
         'numpy_rng': np.random.get_state(),
         'torch_rng': torch.random.get_rng_state(),
     }
-
+    if not os.path.exists(os.path.dirname(filepath)):
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
     torch.save(save_info, filepath)
-    print(f"save the model to {filepath}")
+    print(f"Model saved to {filepath}")
 
 def load_model_inference(filepath):
-    return torch.load(filepath, weights_only=True)
+    """
+    Load a model and its components for inference from a saved file.
+
+    Parameters:
+    - filepath: str
+        The path to the saved model file.
+
+    Returns:
+    - model: torch.nn.Module
+        The reloaded model with weights loaded.
+    - args: argparse.Namespace
+        Arguments saved with the model.
+    """
+    checkpoint = torch.load(filepath, weights_only=False)
+
+    # Dynamically reconstruct the model
+    model_class = checkpoint['model_class']
+    pretrained_model_name = checkpoint.get('pretrained_model_name', None)
+    sentiment_head_type = checkpoint.get('sentiment_head_type', 'fcn')
+    riesz_head_type = checkpoint.get('riesz_head_type', 'fcn')
+
+    if pretrained_model_name is None:
+        raise ValueError("The checkpoint does not contain a 'pretrained_model_name' required to initialize the model.")
+
+    # Reconstruct the model with all necessary architecture arguments
+    model = model_class(pretrained_model_name, sentiment_head_type=sentiment_head_type,
+                        riesz_head_type=riesz_head_type)
+    model.load_state_dict(checkpoint['model_state_dict'])  # load best params
+
+    print(f"Model loaded from {filepath}")
+    return model, checkpoint['args']
 
 def get_default_sent_training_args(regime: str):
     """ 
@@ -96,7 +145,7 @@ def get_default_sim_training_args(regime: str):
     if regime == 'base_sim':
 
         # ======= general training settings =======
-        parser.add_argument("--pretrained_model_name", type=str, default="sentence-transformers/msmarco-distilbert-base-v4") 
+        parser.add_argument("--pretrained_model_name", type=str, default="c") 
         # type=str, default="bert-base-uncased")
         # "meta-llama/Llama-3.1-8B",
         parser.add_argument("--seed", type=int, default=11711)
@@ -150,6 +199,19 @@ def seed_everything(seed=11711):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
+    
+def process_unfreeze_param(unfreeze_param: str):
+    """
+    Process the unfreeze parameter for the backbone model.
+    """
+    if unfreeze_param == 'all':
+        return 'all'
+    elif 'top' in unfreeze_param:
+        return int(unfreeze_param.split('top')[-1])
+    elif 'iterative' in unfreeze_param:
+        return 'iterative'
+    else:
+        raise ValueError(f"Unfreeze parameter {unfreeze_param} not recognized. Select one of 'top[n]', 'all', 'iterative'")
 
 class EarlyStopper:
     def __init__(self, 
@@ -297,12 +359,32 @@ def save_metrics_to_db(experiment_id, metrics, db_path="out/experiments.db"):
     print(f"Metrics saved for Experiment ID: {experiment_id}")
 
 
+def convert_to_native(obj):
+    """
+    Recursively converts NumPy types to native Python types.
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_native(v) for v in obj]
+    else:
+        return obj
+    
 def save_outputs_to_db(experiment_id, split, targets, predictions, db_path="out/experiments.db"):
     """
     Save output targets and predictions into the 'outputs' table in the database.
     """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    
+    targets = convert_to_native(targets)
+    predictions = convert_to_native(predictions)
 
     cursor.execute("""
     INSERT INTO outputs (experiment_id, split, targets, predictions)
@@ -312,7 +394,6 @@ def save_outputs_to_db(experiment_id, split, targets, predictions, db_path="out/
     conn.commit()
     conn.close()
     print(f"Outputs saved for {split} split in Experiment ID: {experiment_id}")
-
 
 def save_model_weights_to_db(experiment_id, weight_path, db_path="out/experiments.db"):
     """

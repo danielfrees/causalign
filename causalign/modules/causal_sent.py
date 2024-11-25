@@ -67,38 +67,101 @@ class CausalSent(torch.nn.Module):
                                 probs=False)
         for param in self.sentiment.parameters():
             param.requires_grad = True
+            
+    def percentage_trainable_params(self):
+        """         
+        Returns the percentage of trainable parameters (float).
+        """
+        total_params = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        trainable_percentage = (trainable_params / total_params) * 100
+        return trainable_percentage
+    
+    def percentage_trainable_backbone_params(self):
+        """
+        Returns the percentage of trainable backbone parameters (float).
+        """
+        total_params = sum(p.numel() for p in self.backbone.parameters())
+        trainable_params = sum(p.numel() for p in self.backbone.parameters() if p.requires_grad)
+        trainable_percentage = (trainable_params / total_params) * 100
+        return trainable_percentage
+            
+    def unfreeze_backbone_fraction(self, fraction: float):
+        """ 
+        Unfreeze a fraction of the backbone layers. Only considers top-level 
+        layers. Rounds to an integer number of layers and unfreezes.
         
-    def unfreeze_backbone(self, num_layers: Union[str, int] = 'all'):
+        Parameters:
+        - fraction: float
+            Fraction of backbone layers to unfreeze.
+            
+        Returns tuple of the percentages of trainable parameters in the backbone and overall model.
+        """
+        encoder = getattr(self.backbone, "encoder", getattr(self.backbone, "transformer", None))
+        if encoder is None:
+            raise AttributeError("The backbone model does not have an 'encoder' or 'transformer' attribute.")
+            
+        total_backbone_layers = len(list(encoder.layer))
+        num_layers_to_unfreeze = int(total_backbone_layers * fraction)
+        
+        return self.unfreeze_backbone(num_layers=num_layers_to_unfreeze)
+
+    def unfreeze_backbone(self, 
+                        num_layers: Union[str, int] = 'all', 
+                        verbose: bool = False):
         """ 
         Iteratively unfreeze backbone layers.
-        
+
         Parameters:
         - num_layers: Union[str, int], default='all'
             Number of backbone layers to unfreeze.
             If 'all', unfreeze all layers. 
+            
+        Returns dict of the percentages of trainable parameters in the overall model and backbone.
         """
-        print("\n" + "=" * 50)
-        print("Unfreezing Backbone Layers:")
-        if num_layers == 'all':
-            for param in self.backbone.parameters():
-                param.requires_grad = True
-            print("  > All layers have been unfrozen.")
+        if num_layers <= 0:  
+            pass # don't unfreeze anything
         else:
-            # Unfreeze the last `num_layers` layers
-            assert isinstance(num_layers, int), "num_layers must be 'all' or an integer."
-            layer_list = list(self.backbone.encoder.layer)  # List of layers
-            layers_to_unfreeze = layer_list[-num_layers:]
+            print("\n" + "=" * 50)
+            print("Unfreezing Backbone Layers:")
 
-            for layer in layers_to_unfreeze:
-                for param in layer.parameters():
+            encoder = getattr(self.backbone, "encoder", getattr(self.backbone, "transformer", None))
+            if encoder is None:
+                raise AttributeError("The backbone model does not have an 'encoder' or 'transformer' attribute.")
+
+            if num_layers == 'all':
+                for param in self.backbone.parameters():
                     param.requires_grad = True
-            print(f"  > Last {num_layers} backbone layers have been unfrozen.")
+                print("  > All layers have been unfrozen.")
+            else:
+                # Unfreeze the last `num_layers` layers
+                assert isinstance(num_layers, int), "num_layers must be 'all' or an integer."
+                layer_list = list(encoder.layer)  # List of layers
+                layers_to_unfreeze = layer_list[-num_layers:]   # would break with non-positive ints, but we check that above
 
-        # Verbose unfreezing output
-        for name, param in self.backbone.named_parameters():
-            if param.requires_grad:
-                print(f"    - Unfrozen: {name}")
-        print("=" * 50 + "\n")
+                for layer in layers_to_unfreeze:
+                    for param in layer.parameters():
+                        param.requires_grad = True
+                print(f"  > Last {num_layers} backbone layers have been unfrozen.")
+
+            # Verbose unfreezing output
+            if verbose:
+                for name, param in self.backbone.named_parameters():
+                    if param.requires_grad:
+                        print(f"    - Unfrozen: {name}")
+
+            total_params = sum(p.numel() for p in self.backbone.parameters())
+            trainable_params_after = sum(p.numel() for p in self.backbone.parameters() if p.requires_grad)
+            trainable_percentage = (trainable_params_after / total_params) * 100
+
+            print(f"\nBackbone Parameters Summary:")
+            print(f"  > Total Parameters: {total_params:,}")
+            print(f"  > Trainable Parameters (After Unfreezing): {trainable_params_after:,}")
+            print(f"  > Percentage Trainable: {trainable_percentage:.2f}%")
+            print("=" * 50 + "\n")
+        
+        return {"trainable_model": self.percentage_trainable_params(),
+                "trainable_backbone": self.percentage_trainable_backbone_params()}
 
     def forward(self,
                 input_ids_real, 

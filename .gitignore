@@ -166,3 +166,7 @@ cython_debug/
 
 wandb/
 acl_data/
+
+# out other than out/README.md
+causalign/out/*
+!causalign/out/README.md

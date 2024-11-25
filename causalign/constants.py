@@ -20,8 +20,11 @@ CITED_ID_COL = "citedpaperid"
 NEGATIVE_ID_COL = "negativepaperid"
 CORPUS_ID_COL = "corpus_paper_id"
 
-SUPPORTED_BACKBONES_LIST = ['sentence-transformers/msmarco-distilbert-base-v4',
+SUPPORTED_BACKBONES_LIST = ["sentence-transformers/msmarco-distilbert-base-v3", 
+                            'sentence-transformers/msmarco-distilbert-base-v4',
                             'meta-llama/Llama-3.1-8B']
+DISTILBERT_SUPPORTED_MODELS = ["sentence-transformers/msmarco-distilbert-base-v3", 
+                            'sentence-transformers/msmarco-distilbert-base-v4']
 
 ACL_DATA_DIR = "acl_data"
 

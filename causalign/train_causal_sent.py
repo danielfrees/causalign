@@ -18,7 +18,8 @@ from causalign.data.generators import SimilarityDataset
 from causalign.utils import (save_model, load_model_inference, 
                     get_default_sent_training_args, seed_everything, 
                     EarlyStopper, initialize_database, save_arguments_to_db,
-                    save_metrics_to_db, save_model_weights_to_db, save_outputs_to_db)
+                    save_metrics_to_db, save_model_weights_to_db, save_outputs_to_db,
+                    process_unfreeze_param)
 import wandb
 import pandas as pd
 
@@ -47,8 +48,7 @@ def train_causal_sent(args):
         imdb_train = imdb_train_splits["train"]
         imdb_val = imdb_train_splits["test"]
         
-        
-
+    
         imdb_test = load_imdb_data(split = "test")
 
         imdb_ds_train: IMDBDataset = IMDBDataset(imdb_train, 
@@ -113,7 +113,18 @@ def train_causal_sent(args):
                     sentiment_head_type = args.sentiment_head_type, 
                     riesz_head_type = args.riesz_head_type).to(device)
     
-    # TODO: manage unfreezing and iterative unfreezing based on args.unfreeze_backbone
+    percent_trainable_params: dict = {
+        'trainable_backbone': model.percentage_trainable_backbone_params(),
+        'trainable_model': model.percentage_trainable_params()
+    }
+    fraction_to_unfreeze: float = None
+    args.unfreeze_backbone = process_unfreeze_param(args.unfreeze_backbone) 
+    if args.unfreeze_backbone == "all" or isinstance(args.unfreeze_backbone, int):
+        percent_trainable_params = model.unfreeze_backbone(num_layers = args.unfreeze_backbone)
+    elif args.unfreeze_backbone == "iterative":
+        fraction_to_unfreeze: float = 0  # iterates fractonally through training loop relative to epochs
+    else:
+        raise ValueError("unfreeze_backbone parsed badly: {args.unfreeze_backbone}")
     
     # TODO: add in peft LoRA config stuff and pass to model for the backbone
     
@@ -126,6 +137,13 @@ def train_causal_sent(args):
         model.train()
         total_loss = 0
         train_targets, train_predictions = [], []
+        
+        # ========= Iterative Unfreezing ==========
+        if args.unfreeze_backbone == "iterative":
+            epoch_fraction = epoch / epochs
+            if epoch_fraction > fraction_to_unfreeze:
+                fraction_to_unfreeze = epoch_fraction
+                percent_trainable_params = model.unfreeze_backbone_fraction(fraction_to_unfreeze)  # only unfreeze when something changes (not a bug otherwise, just waste of time)
         
         for i, batch in enumerate(train_loader):
             input_ids_real = batch['input_ids_real'].to(device)
@@ -189,18 +207,26 @@ def train_causal_sent(args):
             if (i + 1) % log_every == 0:
                 train_acc = accuracy_score(train_targets, train_predictions)
                 train_f1 = f1_score(train_targets, train_predictions)
-                wandb.log({"Train Loss": loss.item(), 
-                        "Train Accuracy": train_acc, 
-                        "Train F1": train_f1, 
-                        f"Tau_Hat_{args.treatment_phrase}": tau_hat.item(),
-                        "Batch": i + 1})
+                print(percent_trainable_params)
+                wandb.log(
+                        {"Train Loss": loss.item(), 
+                            "Train Accuracy": train_acc, 
+                            "Train F1": train_f1, 
+                            f"Tau_Hat_{args.treatment_phrase}": tau_hat.item(),
+                            "Batch": i + 1, 
+                            "Backbone %Trainable": percent_trainable_params['trainable_backbone'],
+                            "Model %Trainable": percent_trainable_params['trainable_model']
+                        }, 
+                        )
                 print(
                     f"Epoch {epoch + 1}/{epochs}, "
                     f"Batch {i + 1}/{len(train_loader)}, "
                     f"Loss: {loss.item():.4f}, "
                     f"Accuracy: {train_acc:.4f}, "
                     f"F1: {train_f1:.4f}, "
-                    f"Tau_Hat_{args.treatment_phrase}: {tau_hat.item():.4f}"
+                    f"Tau_Hat_{args.treatment_phrase}: {tau_hat.item():.4f}, "
+                    f"Backbone %Trainable: {percent_trainable_params['trainable_backbone']}, "
+                    f"Model %Trainable: {percent_trainable_params['trainable_model']},"
                 )
                 
         # ======= Validation Metrics (Log Every Epoch) =======
@@ -235,7 +261,7 @@ def train_causal_sent(args):
         # ==== end epoch ====
         
     best_model_path = os.path.join("out", f"experiment_{experiment_id}", "best_model.pt")
-    best_model = load_model_inference(best_model_path)
+    best_model, _ = load_model_inference(best_model_path)
     best_model.eval()
     
     # compute outputs for full training, val, and test sets at the end and save
@@ -253,8 +279,6 @@ def train_causal_sent(args):
             
             train_targets.extend(targets.cpu().numpy())
             train_predictions.extend(preds) 
-    
-    train_output = pd.DataFrame.from_dict({"train_targets": train_targets, "train_predictions": train_predictions})
 
     val_targets, val_predictions = [], []
     with torch.no_grad():
@@ -270,8 +294,6 @@ def train_causal_sent(args):
             val_targets.extend(targets.cpu().numpy())
             val_predictions.extend(preds)
 
-    val_output = pd.DataFrame.from_dict({"val_targets": val_targets, "val_predictions": val_predictions})
-
     test_targets, test_predictions = [], []
     with torch.no_grad():
         for batch in test_loader:
@@ -285,8 +307,6 @@ def train_causal_sent(args):
             
             test_targets.extend(targets.cpu().numpy())
             test_predictions.extend(preds)
-
-    test_output = pd.DataFrame.from_dict({"test_targets": test_targets, "test_predictions": test_predictions})
     
     save_outputs_to_db(experiment_id, "train", train_targets, train_predictions)
     save_outputs_to_db(experiment_id, "val", val_targets, val_predictions)
@@ -303,15 +323,15 @@ def train_causal_sent(args):
     test_f1 = f1_score(test_targets, test_predictions)
     
     final_metrics = {
-        "Final Train Accuracy": train_acc,
-        "Final Train F1": train_f1,
-        "Final Val Accuracy": val_acc,
-        "Final Val F1": val_f1,
-        "Final Test Accuracy": test_acc,
-        "Final Test F1": test_f1
+        "train_acc": train_acc,
+        "train_f1": train_f1,
+        "val_acc": val_acc,
+        "val_f1": val_f1,
+        "test_acc": test_acc,
+        "test_f1": test_f1
     }
     save_metrics_to_db(experiment_id, final_metrics)
-    wandb.log(final_metrics)
+    wandb.log({f"{k}_final": v for k, v in final_metrics.items()})
 
     return
 
