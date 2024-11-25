@@ -174,15 +174,14 @@ class SimilarityDataset(Dataset):
             - control_text: The text with the treatment phrase replaced by '[MASK]'.
             """
             mask_token = None
-            print(f"Tokenizer type: {type(tokenizer)}")
             if isinstance(tokenizer, DistilBertTokenizer):
                 mask_token = tokenizer.mask_token
-                print(f"Tokenizer mask token: {mask_token}")
+                #print(f"Tokenizer mask token: {mask_token}")
             else: 
                 # llama is weird, need to use eos_token for mask
                 if 'llama' in self.p.pretrained_model_name:
                     mask_token = tokenizer.pad_token
-                    print(f"Tokenizer mask token: {mask_token}")
+                    #print(f"Tokenizer mask token: {mask_token}")
                 else:
                     raise ValueError("Mask token failed. Expected DistilBert or llama Autotokenizer.")
                 # TODO: handle the above more elegantly
