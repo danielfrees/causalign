@@ -45,7 +45,7 @@ def train_causal_sent(args):
     # ======= Setup Tracking and Device ========
     # Initialize wandb
     # !! TODO: change project name when running diff gridsearches !!
-    wandb.init(project="causal-sentiment-architecture-gridsearch", config=args)
+    wandb.init(project="causal-sentiment-architecture-doublyrobust", config=args)
     # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() 
                         else "mps" if torch.backends.mps.is_available() 
@@ -105,8 +105,8 @@ def train_causal_sent(args):
     running_ate: bool = args.running_ate # whether to track a running average or batch average to compute the RR ATE
     pretrained_model_name: str = args.pretrained_model_name
     lr: float = args.lr
-    estimate_targets_for_ate: bool = args.estimate_targets_for_ate # whether to use estimated sentiment probabilities or true targets to compute the RR ATE
-
+    doubly_robust: bool = args.doubly_robust # whether to use doubly robust estimation of ATE
+    
     # DataLoaders
     train_loader = DataLoader(ds_train, batch_size=batch_size, shuffle=True, collate_fn=SimilarityDataset.collate_fn)
     val_loader = DataLoader(ds_val, batch_size=batch_size, collate_fn=SimilarityDataset.collate_fn)
@@ -178,13 +178,30 @@ def train_causal_sent(args):
                 attention_mask_control,
             )
 
+            # TODO: update this to use doubly robust as an option, 
+            # remove direct targets option, it should be using the estimates 
+            
             # Compute tau_hat (estimated average treatment effect (ATE) of the 
             # selected treatment_phrase as estimated by a riesz representation
             # formula with RR computed via our simple implementation of RieszNet
+            
+            # note, whenever computing g (our estimate of the oracle sentiment analysis function)
+            # we must apply sigmoid to the logits, otherwise treatment effects become nonsense 
+            # in the binary sentiment domain 
             if running_ate:
                 # Compute batch-level numerator and denominator
-                batch_numer = torch.sum(riesz_outputs_real * (torch.sigmoid(sentiment_outputs_real) if estimate_targets_for_ate else targets))
-                batch_denom = riesz_outputs_real.size(0)  # Batch size
+                batch_numer = None
+                batch_denom = None
+                if doubly_robust:
+                    # TE_direct = g(X_i, 1) - g(X_i, 0), averaged later -> ATE_DIRECT
+                    direct_te = torch.sigmoid(sentiment_outputs_treated) - torch.sigmoid(sentiment_outputs_control)
+                    # TE_doublyrobust = TE_direct + RR(Z) * (Y - g(Z)), -> sum, -> averaged later by denom -> DR_ATE_DIRECT
+                    batch_numer = torch.sum(direct_te + riesz_outputs_real * (targets - torch.sigmoid(sentiment_outputs_real)))
+                else:
+                    # RR(Z) * g(Z)  -- r.r. ATE, not doubly robust, averaged later
+                    batch_numer = torch.sum(riesz_outputs_real * torch.sigmoid(sentiment_outputs_real))
+                    
+                batch_denom = riesz_outputs_real.size(0)  # Batch size for E_n[.]
 
                 # Update the running numerator and denominator
                 running_ate_numer += batch_numer.item()
@@ -193,12 +210,20 @@ def train_causal_sent(args):
                 # Recompute tau_hat as the mean
                 tau_hat = torch.Tensor([running_ate_numer / running_ate_denom]).to(device)
             else:
-                tau_hat = torch.mean(riesz_outputs_real * (torch.sigmoid(sentiment_outputs_real) if estimate_targets_for_ate else targets))
+                tau_hat = None
+                if doubly_robust:
+                    # ATE_direct = E_n[g(X_i, 1), g(X_i, 0)]
+                    direct_ate = torch.mean(torch.sigmoid(sentiment_outputs_treated) - torch.sigmoid(sentiment_outputs_control))
+                    # ATE_doublyrobust = ATE_direct + E_n[RR(Z) * (Y - g(Z))]
+                    tau_hat = direct_ate + torch.mean(riesz_outputs_real * (targets - torch.sigmoid(sentiment_outputs_real)))
+                else:
+                    # E_n[RR(Z) * g_0(Z)]  -- r.r. ATE, not doubly robust
+                    tau_hat = torch.mean(riesz_outputs_real * torch.sigmoid(sentiment_outputs_real))
             
             if args.autocast:
                 with autocast(device_type=str(device), dtype=torch.bfloat16):  # Use autocast for MPS
                     riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
-                    reg_loss = torch.mean((sentiment_outputs_treated - sentiment_outputs_control - tau_hat) ** 2)
+                    reg_loss = torch.mean(((sentiment_outputs_treated - sentiment_outputs_control) - tau_hat) ** 2)
                     bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
                     loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
             else:

@@ -15,7 +15,8 @@ python train_causal_sent.py \
     --treatment_phrase love \
     --lambda_bce 1.0 \
     --lambda_reg 0.01 \
-    --lambda_riesz 0.01 \
+    --lambda_riesz 1.0 \
     --dataset imdb \
     --log_every 5 \
-    --running_ate
+    --running_ate \
+    --doubly_robust

@@ -149,6 +149,7 @@ class SimilarityDataset(Dataset):
                     return text
 
             if append_where == 'end':
+                warnings.warn(f"Appending treatment phrase '{treatment_phrase}' to the end of the text. BE SURE THAT YOU ARE NOT TRUNCATING TEXTS.")
                 return text + ' ' + treatment_phrase
             elif append_where == 'start':
                 return treatment_phrase + ' ' + text

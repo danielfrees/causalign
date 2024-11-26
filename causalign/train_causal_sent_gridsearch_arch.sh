@@ -27,9 +27,10 @@ for MODEL in "${PRETRAINED_MODELS[@]}"; do
                         --treatment_phrase love \
                         --lambda_bce 1.0 \
                         --lambda_reg 0.01 \
-                        --lambda_riesz 0.01 \
+                        --lambda_riesz 1.0 \
                         --dataset imdb \
                         --log_every 50 \
+                        --doubly_robust \
                         $RUNNING_ATE
                 done
             done
