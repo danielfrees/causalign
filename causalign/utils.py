@@ -104,8 +104,8 @@ def get_default_sent_training_args(regime: str):
         parser.add_argument("--limit_data", type=int, default=0, help='Number of rows to include from the dataset. Values <=0 do no subsetting.') #TODO: revert to full data
         parser.add_argument("--train_regime", type=str, default=regime, choices=['base', 'itvreg'])
         # early stopping
-        parser.add_argument("--early_stop_patience", type=int, default=5, help='Number of epochs allowed with increased validation accuracy before stopping early.') #TODO: revert to full data
-        parser.add_argument("--early_stop_delta", type=float, default=0.1, help='Amount of increased validation accuracy to tolerate in early stopping criterion.')
+        parser.add_argument("--early_stop_patience", type=int, default=2, help='Number of epochs allowed with decreased validation accuracy before stopping early.') #TODO: revert to full data
+        parser.add_argument("--early_stop_delta", type=float, default=0.05, help='Amount of decreased validation accuracy to tolerate in early stopping criterion.')
         
         # ======= data settings =======
         print("Selecting dataset for sentiment task (IMDB or CivilComments)...")
