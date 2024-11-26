@@ -140,7 +140,7 @@ def train_causal_sent(args):
         
         # ========= Iterative Unfreezing ==========
         if args.unfreeze_backbone == "iterative":
-            epoch_fraction = epoch / epochs
+            epoch_fraction = (epoch + 1) / epochs
             if epoch_fraction > fraction_to_unfreeze:
                 fraction_to_unfreeze = epoch_fraction
                 percent_trainable_params = model.unfreeze_backbone_fraction(fraction_to_unfreeze)  # only unfreeze when something changes (not a bug otherwise, just waste of time)
@@ -207,7 +207,6 @@ def train_causal_sent(args):
             if (i + 1) % log_every == 0:
                 train_acc = accuracy_score(train_targets, train_predictions)
                 train_f1 = f1_score(train_targets, train_predictions)
-                print(percent_trainable_params)
                 wandb.log(
                         {"Train Loss": loss.item(), 
                             "Train Accuracy": train_acc, 
