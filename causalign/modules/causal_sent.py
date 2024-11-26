@@ -203,7 +203,7 @@ class CausalSent(torch.nn.Module):
                 input_ids_control, 
                 attention_mask_real, 
                 attention_mask_treated, 
-                attention_mask_control):
+                attention_mask_control)-> Union[torch.Tensor, tuple]:
         
         if self.training:
             backbone_output_real = self.backbone(input_ids_real, attention_mask=attention_mask_real)
@@ -224,23 +224,23 @@ class CausalSent(torch.nn.Module):
                 else:
                     raise ValueError("[ERROR] Unsupported backbone model.")
 
-            # Pass embeddings through Riesz and Sentiment heads
-            if self.riesz_head_type in ['fcn', 'linear']:
+            # =========== Produce RR and Sentiment Outputs ===========
+            if self.riesz_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
                 riesz_output_real = self.riesz(embedding_real)
                 riesz_output_treated = self.riesz(embedding_treated)
                 riesz_output_control = self.riesz(embedding_control)
-            elif self.riesz_head_type == 'conv':
+            elif self.riesz_head_type == 'conv':  # pass sequence of embeddings to conv
                 riesz_output_real = self.riesz(backbone_output_real.last_hidden_state)
                 riesz_output_treated = self.riesz(backbone_output_treated.last_hidden_state)
                 riesz_output_control = self.riesz(backbone_output_control.last_hidden_state)
             else:
                 raise ValueError(f"[ERROR] Unsupported Riesz head type: {self.riesz_head_type}.")
                 
-            if self.sentiment_head_type in ['fcn', 'linear']:
+            if self.sentiment_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
                 sentiment_output_real = self.sentiment(embedding_real)
                 sentiment_output_treated = self.sentiment(embedding_treated)
                 sentiment_output_control = self.sentiment(embedding_control)
-            elif self.sentiment_head_type == 'conv':
+            elif self.sentiment_head_type == 'conv': # pass sequence of embeddings to conv
                 sentiment_output_real = self.sentiment(backbone_output_real.last_hidden_state)
                 sentiment_output_treated = self.sentiment(backbone_output_treated.last_hidden_state)
                 sentiment_output_control = self.sentiment(backbone_output_control.last_hidden_state)
@@ -252,13 +252,26 @@ class CausalSent(torch.nn.Module):
         else:
             backbone_output_real = self.backbone(input_ids_real, attention_mask=attention_mask_real)
             
-            if isinstance(self.backbone, DistilBertModel):
-                embedding_real = backbone_output_real.last_hidden_state[:, 0, :]  # CLS token embedding
-            elif isinstance(self.backbone, LlamaModel):
-                embedding_real = backbone_output_real.last_hidden_state[:, -1, :]  # Last token embedding
+            embedding_real = None
+            embeddings_real = None
+            if self.sentiment_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
+                if isinstance(self.backbone, DistilBertModel):
+                    embedding_real = backbone_output_real.last_hidden_state[:, 0, :]  # CLS token embedding
+                elif isinstance(self.backbone, LlamaModel):
+                    embedding_real = backbone_output_real.last_hidden_state[:, -1, :]  # Last token embedding
+                else:
+                    raise ValueError("[ERROR] Unsupported backbone model.")
+            elif self.sentiment_head_type == 'conv': # pass sequence of embeddings to conv
+                embeddings_real = backbone_output_real.last_hidden_state
             else:
-                raise ValueError("[ERROR] Unsupported backbone model.")
+                raise ValueError(f"[ERROR] Unsupported sentiment head type: {self.sentiment_head_type}.")
             
-            sentiment_output_real = self.sentiment(embedding_real)
-        
+            # pass either pooled or sequence embeddings depending on sentiment head type
+            if embedding_real is not None:
+                sentiment_output_real = self.sentiment(embedding_real)
+            elif embeddings_real is not None:
+                sentiment_output_real = self.sentiment(embeddings_real)
+            else:
+                raise ValueError("[ERROR] No valid embeddings found for sentiment head.")
+
             return sentiment_output_real
