@@ -16,4 +16,4 @@ python train_causal_sent.py \
     --lambda_reg 0.01 \
     --lambda_riesz 0.01 \
     --dataset imdb \
-    --log_every 5
+    --log_every 5 \

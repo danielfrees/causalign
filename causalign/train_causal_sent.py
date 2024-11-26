@@ -10,6 +10,7 @@ if TOP_DIR not in sys.path:
     sys.path.insert(0, TOP_DIR)
 import torch
 from torch.utils.data import DataLoader
+from torch.amp import autocast, GradScaler
 from sklearn.metrics import accuracy_score, f1_score
 from causalign.data.utils import load_imdb_data, load_civil_comments_data
 from causalign.data.generators import IMDBDataset, CivilCommentsDataset
@@ -40,6 +41,17 @@ def train_causal_sent(args):
     # ====== Initialize Experiment Tracking DB ======
     initialize_database()
     experiment_id = save_arguments_to_db(args)
+    
+    # ======= Setup Tracking and Device ========
+    # Initialize wandb
+    wandb.init(project="causal-sentiment", config=args)
+    # Device setup
+    device = torch.device("cuda" if torch.cuda.is_available() 
+                        else "mps" if torch.backends.mps.is_available() 
+                        else "cpu")
+    print(f"Using device: {device}")
+    if str(device) == "mps" and args.autocast:
+        raise ValueError("Mixed precision training not supported with MPS. Disable autocast.")
     
     # =========== Load Data ==============
     if args.dataset == "imdb":
@@ -80,15 +92,6 @@ def train_causal_sent(args):
         ds_train = civil_ds_train
         ds_val = civil_ds_val
         ds_test = civil_ds_test
-    
-    # ======= Setup Tracking and Device ========
-    # Initialize wandb
-    wandb.init(project="causal-sentiment", config=args)
-    # Device setup
-    device = torch.device("cuda" if torch.cuda.is_available() 
-                        else "mps" if torch.backends.mps.is_available() 
-                        else "cpu")
-    print(f"Using device: {device}")
 
     # ======== Setup Training ==========
     # Hyperparameters
@@ -131,6 +134,9 @@ def train_causal_sent(args):
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     bce_loss = torch.nn.BCEWithLogitsLoss()
 
+    # ===== scale gradients for mixed precision training =====
+    scaler = GradScaler() if args.autocast else None
+    
     # ================ Training Loop =================
     early_stopper = EarlyStopper(patience=args.early_stop_patience, delta=args.early_stop_delta)
     for epoch in range(epochs):
@@ -154,6 +160,8 @@ def train_causal_sent(args):
             attention_mask_control = batch['attention_mask_control'].to(device)
             targets = batch['targets'].float().to(device)
             
+            optimizer.zero_grad()  # Clear gradients
+
             # fwd pass
             (sentiment_outputs_real, sentiment_outputs_treated, sentiment_outputs_control, 
             riesz_outputs_real, riesz_outputs_treated, riesz_outputs_control) = model(
@@ -183,16 +191,27 @@ def train_causal_sent(args):
             else:
                 tau_hat = torch.mean(riesz_outputs_real * (torch.sigmoid(sentiment_outputs_real) if estimate_targets_for_ate else targets))
             
-            # Compute losses
-            riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
-            reg_loss = torch.mean((sentiment_outputs_treated - sentiment_outputs_control - tau_hat) ** 2)
-            bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
-            loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
+            if args.autocast:
+                with autocast(device_type=str(device), dtype=torch.bfloat16):  # Use autocast for MPS
+                    riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
+                    reg_loss = torch.mean((sentiment_outputs_treated - sentiment_outputs_control - tau_hat) ** 2)
+                    bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
+                    loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
+            else:
+                # Compute losses without autocast
+                riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
+                reg_loss = torch.mean(((sentiment_outputs_treated - sentiment_outputs_control) - tau_hat) ** 2)
+                bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
+                loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
 
-            # backprop the gradients and update the model weights
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            if args.autocast:
+                # scale gradients to avoid underflow/overflow if autocasting
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
             total_loss += loss.item()
 
