@@ -95,7 +95,7 @@ def get_default_sent_training_args(regime: str):
         parser.add_argument("--use_gpu", action='store_true', default = True)
         parser.add_argument("--autocast", action='store_true', default = False)  # mixed precision training, only good on cuda
         parser.add_argument("--num_workers", type=int, default=14)   # tune for your machine 
-        parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')   # tune for your machine
+        parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')   # tune for your machine
         parser.add_argument('--lr', type=float, default=1e-5, help='Learning rate')
         parser.add_argument('--epochs', type=int, default=20, help='Number of training epochs')
         # logging 

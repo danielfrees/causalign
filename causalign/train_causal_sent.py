@@ -44,7 +44,8 @@ def train_causal_sent(args):
     
     # ======= Setup Tracking and Device ========
     # Initialize wandb
-    wandb.init(project="causal-sentiment", config=args)
+    # !! TODO: change project name when running diff gridsearches !!
+    wandb.init(project="causal-sentiment-architecture-gridsearch", config=args)
     # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() 
                         else "mps" if torch.backends.mps.is_available() 
@@ -144,6 +145,10 @@ def train_causal_sent(args):
         total_loss = 0
         train_targets, train_predictions = [], []
         
+        # reset running ATE every epoch
+        running_ate_numer: float = 0 
+        running_ate_denom: float = 0
+        
         # ========= Iterative Unfreezing ==========
         if args.unfreeze_backbone == "iterative":
             epoch_fraction = (epoch + 1) / epochs
@@ -177,17 +182,16 @@ def train_causal_sent(args):
             # selected treatment_phrase as estimated by a riesz representation
             # formula with RR computed via our simple implementation of RieszNet
             if running_ate:
-                if "epoch_riesz_outputs" not in locals():
-                    epoch_riesz_outputs, epoch_sentiment_outputs, epoch_targets = [], [], []
-                epoch_riesz_outputs.append(riesz_outputs_real.detach())
-                epoch_sentiment_outputs.append(torch.sigmoid(sentiment_outputs_real.detach()))
-                epoch_targets.append(targets.detach())
+                # Compute batch-level numerator and denominator
+                batch_numer = torch.sum(riesz_outputs_real * (torch.sigmoid(sentiment_outputs_real) if estimate_targets_for_ate else targets))
+                batch_denom = riesz_outputs_real.size(0)  # Batch size
 
-                all_riesz_outputs = torch.cat(epoch_riesz_outputs, dim=0)
-                all_sentiment_outputs = torch.cat(epoch_sentiment_outputs, dim=0)
-                all_targets = torch.cat(epoch_targets, dim=0)
+                # Update the running numerator and denominator
+                running_ate_numer += batch_numer.item()
+                running_ate_denom += batch_denom
 
-                tau_hat = torch.mean(all_riesz_outputs * (all_sentiment_outputs if estimate_targets_for_ate else all_targets))
+                # Recompute tau_hat as the mean
+                tau_hat = torch.Tensor([running_ate_numer / running_ate_denom]).to(device)
             else:
                 tau_hat = torch.mean(riesz_outputs_real * (torch.sigmoid(sentiment_outputs_real) if estimate_targets_for_ate else targets))
             

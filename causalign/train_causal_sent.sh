@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# test script mostly
 # example usage: limited training data for speed here.
 
 python train_causal_sent.py \
@@ -17,3 +18,4 @@ python train_causal_sent.py \
     --lambda_riesz 0.01 \
     --dataset imdb \
     --log_every 5 \
+    --running_ate

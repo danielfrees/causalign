@@ -4,7 +4,7 @@ PRETRAINED_MODELS=("sentence-transformers/msmarco-distilbert-base-v4") #"meta-ll
 UNFREEZE_BACKBONES=("top0" "top3" "all" "iterative")
 RIESZ_HEAD_TYPES=("fcn" "linear" "conv")
 SENTIMENT_HEAD_TYPES=("fcn" "linear" "conv")
-RUNNING_ATE_OPTIONS=("" "--running_ate")  # Empty string for no argument
+RUNNING_ATE_OPTIONS=("--running_ate")  # Empty string for no argument  "--running_ate
 
 # Loop over all parameter combinations
 for MODEL in "${PRETRAINED_MODELS[@]}"; do
