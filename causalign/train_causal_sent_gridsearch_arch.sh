@@ -20,8 +20,8 @@ for MODEL in "${PRETRAINED_MODELS[@]}"; do
                         --unfreeze_backbone "$BACKBONE" \
                         --riesz_head_type "$RIESZ_HEAD" \
                         --sentiment_head_type "$SENTIMENT_HEAD" \
-                        --epochs 1 \
-                        --limit_data 500 \
+                        --epochs 20 \
+                        --limit_data 0 \
                         --max_seq_length 150 \
                         --lr 5e-5 \
                         --treatment_phrase love \
