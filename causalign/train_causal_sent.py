@@ -45,7 +45,7 @@ def train_causal_sent(args):
     # ======= Setup Tracking and Device ========
     # Initialize wandb
     # !! TODO: change project name when running diff gridsearches !!
-    wandb.init(project="causal-sentiment-architecture-doublyrobust", config=args)
+    wandb.init(project="causal-sentiment-architecture-doublyrobust-sigmoidfix", config=args)
     # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() 
                         else "mps" if torch.backends.mps.is_available() 
@@ -223,13 +223,17 @@ def train_causal_sent(args):
             if args.autocast:
                 with autocast(device_type=str(device), dtype=torch.bfloat16):  # Use autocast for MPS
                     riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
-                    reg_loss = torch.mean(((sentiment_outputs_treated - sentiment_outputs_control) - tau_hat) ** 2)
+                    reg_loss = torch.mean(((torch.sigmoid(sentiment_outputs_treated) 
+                                            - torch.sigmoid(sentiment_outputs_control)) 
+                                            - tau_hat) ** 2)
                     bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
                     loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
             else:
                 # Compute losses without autocast
                 riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
-                reg_loss = torch.mean(((sentiment_outputs_treated - sentiment_outputs_control) - tau_hat) ** 2)
+                reg_loss = torch.mean(((torch.sigmoid(sentiment_outputs_treated) 
+                                            - torch.sigmoid(sentiment_outputs_control)) 
+                                            - tau_hat) ** 2)
                 bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
                 loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
 
