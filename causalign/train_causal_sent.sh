@@ -13,8 +13,10 @@
 # or 
 # 1.0, 0.1, 0.1
 
+#--treated_only  # to compute and use ATT
+
 python train_causal_sent.py \
-    --project_name causal_sentiment_test_best \
+    --project_name causal_sentiment_test_fake_ate_artichoke \
     --pretrained_model_name sentence-transformers/msmarco-distilbert-base-v4 \
     --unfreeze_backbone top3 \
     --riesz_head_type fcn \
@@ -23,7 +25,7 @@ python train_causal_sent.py \
     --limit_data 4000 \
     --max_seq_length 150 \
     --lr 1e-5 \
-    --treatment_phrase best \
+    --treatment_phrase artichoke \
     --lambda_bce 0 \
     --lambda_reg 0 \
     --lambda_riesz 1.0\
@@ -34,4 +36,3 @@ python train_causal_sent.py \
     --adjust_ate \
     --adjust_change 0.5 \
     --adjust_treat_pop 0.5 \
-    --treated_only
