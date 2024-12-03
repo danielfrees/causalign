@@ -79,11 +79,8 @@ class SimilarityDataset(Dataset):
         - label_col: Name of the column containing the label data.
         """
 
-        if args.adjust_ate:
-            dataset = create_synthetic_dataset(dataset=dataset, 
-                                       fake_treatment_phrase=args.treatment_phrase,
-                                       prop_treated=args.ate_change_treat_prop,
-                                       diff_fake_ate=args.ate_change)
+        self.text_col = text_col
+        self.label_col = label_col
 
         self.limit_data = args.limit_data  # limit data for testing/ faster performance 
         if self.limit_data > 0:
@@ -109,6 +106,14 @@ class SimilarityDataset(Dataset):
             raise ValueError(f"IMDB Dataset must contain {text_col} and {label_col} keys.")
         except TypeError:
             raise ValueError(f"Dataset contains invalid entries in column {text_col}.")
+        
+
+        if args.adjust_ate:
+            dataset = self.create_synthetic_dataset(dataset=dataset, 
+                                       fake_treatment_phrase=args.treatment_phrase,
+                                       prop_treated=args.ate_change_treat_prop,
+                                       diff_fake_ate=args.ate_change)
+
         self.p = args
         self.max_length = args.max_seq_length
         self.split = split
@@ -131,135 +136,12 @@ class SimilarityDataset(Dataset):
         else:
             raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
         
-        # ======== Create synthetic data for evaluation ========
-        def create_synthetic_dataset(
-                dataset: Dataset,
-                fake_treatment_phrase: str = 'saucepan',
-                prop_treated: float = '0.4',
-                diff_fake_ate: float = '0.3',
-                append_where: str = 'start',
-                ignore_case: bool = True):
-            
-            if (prop_treated < 0) or (prop_treated > 1):
-                raise ValueError(f"Please enter a synthetic proportion treated value between 0 and 1, given {prop_treated}")
-            if (diff_fake_ate < 0) or (diff_fake_ate > 1):
-                raise ValueError(f"Please enter a change in ATE between 0 and 1, given {diff_fake_ate}")
-            
-            n = len(dataset)
-            # randomly determine treated rows
-            treated_indices = np.random.choice(n, n*prop_treated, replace=False)
-
-            # add fake treatment word to text
-            dataset[treated_indices, text_col] = [treat_if_untreated(text, fake_treatment_phrase, append_where, ignore_case) for text in dataset[treated_indices, text_col]]
-
-            # randomly flip outcomes to yield ATE of fake_ate
-            treated_labels = dataset[treated_indices, label_col]
-            indices_pos_label_treated = torch.nonzero(treated_labels == 1)
-            indices_neg_label_treated = torch.nonzero(treated_labels == 0)
-            
-            prob_pos_label_given_treated = torch.mean(treated_labels[indices_pos_label_treated])
-            prob_neg_label_given_treated = 1 - prob_pos_label_given_treated
-
-            if (diff_fake_ate > prob_neg_label_given_treated) or  (diff_fake_ate < -prob_pos_label_given_treated):
-                raise ValueError(f"Please enter a valid change in ATE, it must be between {-prob_pos_label_given_treated} and {prob_neg_label_given_treated}")
-
-            switch_num = int(np.round(diff_fake_ate * len(treated_labels)))
-            if diff_fake_ate > 0:
-                switch_indices = np.random.choice(indices_neg_label_treated, switch_num, replace=False)
-
-                treated_labels[switch_indices] = 1
-            else:
-                switch_indices = np.random.choice(indices_pos_label_treated, switch_num, replace=False)
-
-                treated_labels[switch_indices] = 0
-
-            dataset[treated_indices, label_col] = treated_labels
-
-            return dataset
-
-        
-        # ======== Create treated and control counterfactuals for each example ========
-        def treat_if_untreated(
-                text: str, 
-                treatment_phrase: str, 
-                append_where: str = 'start', 
-                ignore_case: bool = True):
-            """
-            If the treatment_phrase is not present in the text, append it as 
-            specified by append_where. Produces treatment counterfactuals.
-
-            Args:
-            - text: The text to treat.
-            - treatment_phrase: The phrase to append to the text.
-            - append_where: Where to append the treatment phrase. Options are 'end' or 'start'.
-            - ignore_case: Whether to ignore case when checking for the treatment phrase.
-            
-            Returns:
-            - treated_text: The treated text. If the text already contains the phrase, 
-            the text is returned unchanged.
-            """
-            if ignore_case:
-                if treatment_phrase.lower() in text.lower():
-                    return text
-            else:
-                if treatment_phrase in text:
-                    return text
-
-            if append_where == 'end':
-                warnings.warn(f"Appending treatment phrase '{treatment_phrase}' to the end of the text. BE SURE THAT YOU ARE NOT TRUNCATING TEXTS.")
-                return text + ' ' + treatment_phrase
-            elif append_where == 'start':
-                return treatment_phrase + ' ' + text
-            else:
-                raise ValueError(f"append_where must be 'start' or 'end'. Got {append_where}.")
-
-        def mask_if_present(
-                text: str, 
-                treatment_phrase: str, 
-                tokenizer: Union[DistilBertTokenizer, AutoTokenizer], 
-                ignore_case: bool = True):
-            """
-            Mask the treatment phrase in the text if it exists. Produces control 
-            counterfactuals. 
-
-            Args:
-            - text: The text to mask.
-            - treatment_phrase: The phrase to mask.
-            - tokenizer: The tokenizer to use for replacing the treatment phrase.
-            - ignore_case: Whether to ignore case when replacing the treatment phrase.
-
-            Returns:
-            - control_text: The text with the treatment phrase replaced by '[MASK]'.
-            """
-            mask_token = None
-            if isinstance(tokenizer, DistilBertTokenizer):
-                mask_token = tokenizer.mask_token
-                #print(f"Tokenizer mask token: {mask_token}")
-            else: 
-                # llama is weird, need to use eos_token for mask
-                if 'llama' in self.p.pretrained_model_name:
-                    mask_token = tokenizer.pad_token
-                    #print(f"Tokenizer mask token: {mask_token}")
-                else:
-                    raise ValueError("Mask token failed. Expected DistilBert or llama Autotokenizer.")
-                # TODO: handle the above more elegantly
-                
-            if not mask_token:
-                raise ValueError("Mask token failed. .eos_token or .mask_token not found in tokenizer.")
-            
-            if ignore_case:
-                import re
-                pattern = re.compile(re.escape(treatment_phrase), re.IGNORECASE)
-                return pattern.sub(mask_token, text)
-            else:
-                return text.replace(treatment_phrase, mask_token)
-        
         self.texts_treated = None
         self.texts_control = None
         if split == 'train':
             print("Creating treated and control counterfactuals...")
-            self.texts_treated = [treat_if_untreated(text, self.treatment_phrase) for text in self.texts]
-            self.texts_control = [mask_if_present(text, self.treatment_phrase, self.tokenizer) for text in self.texts]       
+            self.texts_treated = [self.treat_if_untreated(text, self.treatment_phrase) for text in self.texts]
+            self.texts_control = [self.mask_if_present(text, self.treatment_phrase, self.tokenizer) for text in self.texts]       
         # =============================================================================
         
         # ====== Produce encodings in parallel and cache =======
@@ -274,6 +156,136 @@ class SimilarityDataset(Dataset):
             self.encodings_control = tokenize_texts(texts = self.texts_control,
                                                     tokenizer = self.tokenizer,
                                                     args = args)
+            
+    
+    # ======== Create treated and control counterfactuals for each example ========
+    def treat_if_untreated(
+            self,
+            text: str, 
+            treatment_phrase: str, 
+            append_where: str = 'start', 
+            ignore_case: bool = True):
+        """
+        If the treatment_phrase is not present in the text, append it as 
+        specified by append_where. Produces treatment counterfactuals.
+
+        Args:
+        - text: The text to treat.
+        - treatment_phrase: The phrase to append to the text.
+        - append_where: Where to append the treatment phrase. Options are 'end' or 'start'.
+        - ignore_case: Whether to ignore case when checking for the treatment phrase.
+        
+        Returns:
+        - treated_text: The treated text. If the text already contains the phrase, 
+        the text is returned unchanged.
+        """
+        if ignore_case:
+            if treatment_phrase.lower() in text.lower():
+                return text
+        else:
+            if treatment_phrase in text:
+                return text
+
+        if append_where == 'end':
+            warnings.warn(f"Appending treatment phrase '{treatment_phrase}' to the end of the text. BE SURE THAT YOU ARE NOT TRUNCATING TEXTS.")
+            return text + ' ' + treatment_phrase
+        elif append_where == 'start':
+            return treatment_phrase + ' ' + text
+        else:
+            raise ValueError(f"append_where must be 'start' or 'end'. Got {append_where}.")
+
+    def mask_if_present(
+            self,
+            text: str, 
+            treatment_phrase: str, 
+            tokenizer: Union[DistilBertTokenizer, AutoTokenizer], 
+            ignore_case: bool = True):
+        """
+        Mask the treatment phrase in the text if it exists. Produces control 
+        counterfactuals. 
+
+        Args:
+        - text: The text to mask.
+        - treatment_phrase: The phrase to mask.
+        - tokenizer: The tokenizer to use for replacing the treatment phrase.
+        - ignore_case: Whether to ignore case when replacing the treatment phrase.
+
+        Returns:
+        - control_text: The text with the treatment phrase replaced by '[MASK]'.
+        """
+        mask_token = None
+        if isinstance(tokenizer, DistilBertTokenizer):
+            mask_token = tokenizer.mask_token
+            #print(f"Tokenizer mask token: {mask_token}")
+        else: 
+            # llama is weird, need to use eos_token for mask
+            if 'llama' in self.p.pretrained_model_name:
+                mask_token = tokenizer.pad_token
+                #print(f"Tokenizer mask token: {mask_token}")
+            else:
+                raise ValueError("Mask token failed. Expected DistilBert or llama Autotokenizer.")
+            # TODO: handle the above more elegantly
+            
+        if not mask_token:
+            raise ValueError("Mask token failed. .eos_token or .mask_token not found in tokenizer.")
+        
+        if ignore_case:
+            import re
+            pattern = re.compile(re.escape(treatment_phrase), re.IGNORECASE)
+            return pattern.sub(mask_token, text)
+        else:
+            return text.replace(treatment_phrase, mask_token)
+    
+    # ======== Create synthetic data for evaluation ========
+    def create_synthetic_dataset(
+            self,
+            fake_treatment_phrase: str = 'artichoke',
+            prop_treated: float = 0.4,
+            diff_fake_ate: float = 0.3,
+            append_where: str = 'start',
+            ignore_case: bool = True):
+        
+        print(f"Creating synthetic data with change in ATE of {diff_fake_ate}, making {prop_treated} of the data treated")
+        
+        if (prop_treated < 0) or (prop_treated > 1):
+            raise ValueError(f"Please enter a synthetic proportion treated value between 0 and 1, given {prop_treated}")
+        if (diff_fake_ate < 0) or (diff_fake_ate > 1):
+            raise ValueError(f"Please enter a change in ATE between 0 and 1, given {diff_fake_ate}")
+        
+        n = len(self.texts)
+        # randomly determine treated rows
+        treated_indices = np.random.choice(n, int(np.round(n*prop_treated)), replace=False)
+
+        # add fake treatment word to text
+        self.texts = [self.treat_if_untreated(text, fake_treatment_phrase, append_where, ignore_case) for text in self.texts]
+
+        # randomly flip outcomes to yield ATE of fake_ate
+        treated_labels = torch.tensor(self.targets, dtype=float)[treated_indices]
+        
+        prob_pos_label_given_treated = torch.mean(treated_labels)
+        prob_neg_label_given_treated = 1 - prob_pos_label_given_treated
+
+        if ((diff_fake_ate > 0) and (diff_fake_ate > prob_neg_label_given_treated)) or  ((diff_fake_ate < 0) and (diff_fake_ate < -prob_pos_label_given_treated)):
+            raise ValueError(f"Please enter a valid change in ATE, it must be between {-prob_pos_label_given_treated} and {prob_neg_label_given_treated}")
+
+        switch_num = int(np.round(diff_fake_ate * len(treated_labels)))
+        if diff_fake_ate > 0:
+            indices_neg_label_treated = torch.nonzero(treated_labels == 0).squeeze()
+            switch_indices = np.random.choice(indices_neg_label_treated, switch_num, replace=False)
+
+            treated_labels[switch_indices] = 1
+        else:
+            indices_pos_label_treated = torch.nonzero(treated_labels == 1).squeeze()
+            switch_indices = np.random.choice(indices_pos_label_treated, switch_num, replace=False)
+
+            treated_labels[switch_indices] = 0
+
+        temp_targets = np.array(self.targets)
+
+        temp_targets[treated_indices] = treated_labels
+
+        self.targets = list(temp_targets)
+
             
     def __len__(self):
         return len(self.texts)
