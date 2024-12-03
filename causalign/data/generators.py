@@ -78,6 +78,13 @@ class SimilarityDataset(Dataset):
         - text_col: Name of the column containing the text data.
         - label_col: Name of the column containing the label data.
         """
+
+        if args.adjust_ate:
+            dataset = create_synthetic_dataset(dataset=dataset, 
+                                       fake_treatment_phrase=args.treatment_phrase,
+                                       prop_treated=args.ate_change_treat_prop,
+                                       diff_fake_ate=args.ate_change)
+
         self.limit_data = args.limit_data  # limit data for testing/ faster performance 
         if self.limit_data > 0:
             print(f"Limiting data to {self.limit_data} rows.")
@@ -124,6 +131,52 @@ class SimilarityDataset(Dataset):
         else:
             raise ValueError(f"Model {args.pretrained_model_name} not supported. Tokenizer could not be initialized.")
         
+        # ======== Create synthetic data for evaluation ========
+        def create_synthetic_dataset(
+                dataset: Dataset,
+                fake_treatment_phrase: str = 'saucepan',
+                prop_treated: float = '0.4',
+                diff_fake_ate: float = '0.3',
+                append_where: str = 'start',
+                ignore_case: bool = True):
+            
+            if (prop_treated < 0) or (prop_treated > 1):
+                raise ValueError(f"Please enter a synthetic proportion treated value between 0 and 1, given {prop_treated}")
+            if (diff_fake_ate < 0) or (diff_fake_ate > 1):
+                raise ValueError(f"Please enter a change in ATE between 0 and 1, given {diff_fake_ate}")
+            
+            n = len(dataset)
+            # randomly determine treated rows
+            treated_indices = np.random.choice(n, n*prop_treated, replace=False)
+
+            # add fake treatment word to text
+            dataset[treated_indices, text_col] = [treat_if_untreated(text, fake_treatment_phrase, append_where, ignore_case) for text in dataset[treated_indices, text_col]]
+
+            # randomly flip outcomes to yield ATE of fake_ate
+            treated_labels = dataset[treated_indices, label_col]
+            indices_pos_label_treated = torch.nonzero(treated_labels == 1)
+            indices_neg_label_treated = torch.nonzero(treated_labels == 0)
+            
+            prob_pos_label_given_treated = torch.mean(treated_labels[indices_pos_label_treated])
+            prob_neg_label_given_treated = 1 - prob_pos_label_given_treated
+
+            if (diff_fake_ate > prob_neg_label_given_treated) or  (diff_fake_ate < -prob_pos_label_given_treated):
+                raise ValueError(f"Please enter a valid change in ATE, it must be between {-prob_pos_label_given_treated} and {prob_neg_label_given_treated}")
+
+            switch_num = int(np.round(diff_fake_ate * len(treated_labels)))
+            if diff_fake_ate > 0:
+                switch_indices = np.random.choice(indices_neg_label_treated, switch_num, replace=False)
+
+                treated_labels[switch_indices] = 1
+            else:
+                switch_indices = np.random.choice(indices_pos_label_treated, switch_num, replace=False)
+
+                treated_labels[switch_indices] = 0
+
+            dataset[treated_indices, label_col] = treated_labels
+
+            return dataset
+
         
         # ======== Create treated and control counterfactuals for each example ========
         def treat_if_untreated(

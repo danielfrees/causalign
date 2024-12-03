@@ -31,4 +31,7 @@ python train_causal_sent.py \
     --log_every 5 \
     --running_ate \
     --doubly_robust \
+    --adjust_ate \
+    --adjust_change 0.5 \
+    --adjust_treat_pop 0.5 \
     --treated_only

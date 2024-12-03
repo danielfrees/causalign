@@ -124,6 +124,9 @@ def get_default_sent_training_args(regime: str):
             # to match riesz estimated word-level causal effects.
             # phrases may work, but not currently tested
             parser.add_argument("--treatment_phrase", type = str, default = "love", help = "The treatment word for the causal regularization regime.")
+            parser.add_argument("--adjust_ate", action='store_true', default = False, help = "Determines whether the ATE is adjusted.")
+            parser.add_argument("--ate_change", type=float, default = 0.3, help = "If the ATE is to be adjusted, determines how much the difference will be.")
+            parser.add_argument("--ate_change_treat_prop", type=float, default = 0.3, help = "If the ATE is to be adjusted, determines how big of a treated population should be created.")
             parser.add_argument("--lambda_bce", type=float, default=1.0, help="Weight for the BCE loss term.")
             parser.add_argument("--lambda_reg", type=float, default=1.0, help="Weight for the regularization loss term.")
             parser.add_argument("--lambda_riesz", type=float, default=1.0, help="Weight for the Riesz loss term.")
