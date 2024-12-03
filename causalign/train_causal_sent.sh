@@ -19,4 +19,6 @@ python train_causal_sent.py \
     --dataset imdb \
     --log_every 5 \
     --running_ate \
-    --doubly_robust
+    --doubly_robust \
+    --adjust_ate \
+    --adjust_change
