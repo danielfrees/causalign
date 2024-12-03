@@ -109,7 +109,7 @@ class SimilarityDataset(Dataset):
         self.treatment_phrase = args.treatment_phrase  # treatment word for causal regularization
 
         if self.treated_only: # only include texts that include treatment phrase
-            self.texts = [text for text in self.texts if self.treatment_phrase in text]
+            self.texts = [text for text in self.texts if self.treatment_phrase.lower() in text.lower()]
                         
         # ========= Tokenizer initialization =========
         self.tokenizer = None
