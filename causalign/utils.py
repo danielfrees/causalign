@@ -83,6 +83,9 @@ def get_default_sent_training_args(regime: str):
 
     if 'sent' in regime: 
         # ======= general training settings =======
+        # project_name for namespacing wandb, sqlite tables, etc. 
+        parser.add_argument("--project_name", type = str, default = "causal-sentiment")  #"causal-sentiment-architecture-doublyrobust-sigmoidfix"
+        
         parser.add_argument("--pretrained_model_name", type=str, default="sentence-transformers/msmarco-distilbert-base-v4") 
         # type=str, default="bert-base-uncased")
         # "meta-llama/Llama-3.1-8B",
@@ -112,6 +115,7 @@ def get_default_sent_training_args(regime: str):
         # default data is loaded via huggingface. See dataset/utils.py for details for the IMDB, CivilComments data loading.
         parser.add_argument("--dataset", type=str, default="imdb") # choices=['imdb', 'civilcomments']
         parser.add_argument("--max_seq_length", type=int, default=100, help='Truncate texts to this number of tokens. Useful for faster training.')
+        parser.add_argument("--treated_only", action='store_true', default=False, help="Whether to train only on treated samples. Then estimates an ATE instead of an ATT.")
 
         if regime == 'causal_sent':
             print("Setting hyperparameters for sentiment task...")
@@ -299,65 +303,89 @@ def initialize_database(db_path="out/experiments.db"):
     print(f"Database initialized at {db_path}")
 
 
-def save_arguments_to_db(args, db_path="out/experiments.db"):
+def save_arguments_to_db(args, project_name, db_path="out/experiments.db"):
     """
-    Save argparse arguments into the 'arguments' table in the database.
+    Save argparse arguments into the '<project_name>_arguments' table in the database.
     Dynamically adds columns for any argument keys not already present.
-    
+
     Parameters:
         args: argparse.Namespace
             Arguments object containing all hyperparameters.
+        project_name: str
+            Name of the project to namespace tables.
         db_path: str
             Path to the SQLite database file.
     Returns:
         experiment_id: int
             ID of the saved experiment row.
     """
+    table_name = f"{project_name}_arguments"
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    """)
+
     args_dict = vars(args)  # Convert Namespace to dictionary
-    
-    # Get existing columns in the arguments table
-    cursor.execute("PRAGMA table_info(arguments);")
+
+    # Get existing columns in the table
+    cursor.execute(f"PRAGMA table_info({table_name});")
     existing_columns = [row[1] for row in cursor.fetchall()]  # Column names are in the second field
 
     # Add missing columns
     for key in args_dict.keys():
         column_name = f"arg_{key}"
         if column_name not in existing_columns:
-            cursor.execute(f"ALTER TABLE arguments ADD COLUMN {column_name} TEXT")
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} TEXT")
 
     # Insert values into the table
     columns = ", ".join([f"arg_{key}" for key in args_dict.keys()])
     placeholders = ", ".join(["?"] * len(args_dict))
     values = tuple(str(value) for value in args_dict.values())
 
-    cursor.execute(f"INSERT INTO arguments ({columns}) VALUES ({placeholders})", values)
+    cursor.execute(f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})", values)
     experiment_id = cursor.lastrowid
     conn.commit()
     conn.close()
 
-    print(f"Arguments saved with Experiment ID: {experiment_id}")
+    print(f"Arguments saved with Experiment ID: {experiment_id} in table: {table_name}")
     return experiment_id
 
 
-def save_metrics_to_db(experiment_id, metrics, db_path="out/experiments.db"):
+def save_metrics_to_db(experiment_id, metrics, project_name, db_path="out/experiments.db"):
     """
-    Save training, validation, and testing metrics into the 'metrics' table in the database.
+    Save training, validation, and testing metrics into the '<project_name>_metrics' table in the database.
     """
+    table_name = f"{project_name}_metrics"
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    cursor.execute("""
-    INSERT INTO metrics (experiment_id, train_acc, train_f1, val_acc, val_f1, test_acc, test_f1)
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id INTEGER,
+        train_acc REAL,
+        train_f1 REAL,
+        val_acc REAL,
+        val_f1 REAL,
+        test_acc REAL,
+        test_f1 REAL
+    );
+    """)
+
+    cursor.execute(f"""
+    INSERT INTO {table_name} (experiment_id, train_acc, train_f1, val_acc, val_f1, test_acc, test_f1)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (experiment_id, metrics['train_acc'], metrics['train_f1'], metrics['val_acc'], 
         metrics['val_f1'], metrics['test_acc'], metrics['test_f1']))
 
     conn.commit()
     conn.close()
-    print(f"Metrics saved for Experiment ID: {experiment_id}")
+    print(f"Metrics saved for Experiment ID: {experiment_id} in table: {table_name}")
 
 
 def convert_to_native(obj):
@@ -376,38 +404,60 @@ def convert_to_native(obj):
         return [convert_to_native(v) for v in obj]
     else:
         return obj
-    
-def save_outputs_to_db(experiment_id, split, targets, predictions, db_path="out/experiments.db"):
+
+
+def save_outputs_to_db(experiment_id, split, targets, predictions, project_name, db_path="out/experiments.db"):
     """
-    Save output targets and predictions into the 'outputs' table in the database.
+    Save output targets and predictions into the '<project_name>_outputs' table in the database.
     """
+    table_name = f"{project_name}_outputs"
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    
+
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id INTEGER,
+        split TEXT,
+        targets TEXT,
+        predictions TEXT
+    );
+    """)
+
     targets = convert_to_native(targets)
     predictions = convert_to_native(predictions)
 
-    cursor.execute("""
-    INSERT INTO outputs (experiment_id, split, targets, predictions)
+    cursor.execute(f"""
+    INSERT INTO {table_name} (experiment_id, split, targets, predictions)
     VALUES (?, ?, ?, ?)
     """, (experiment_id, split, json.dumps(targets), json.dumps(predictions)))
 
     conn.commit()
     conn.close()
-    print(f"Outputs saved for {split} split in Experiment ID: {experiment_id}")
+    print(f"Outputs saved for {split} split in Experiment ID: {experiment_id} in table: {table_name}")
 
-def save_model_weights_to_db(experiment_id, weight_path, db_path="out/experiments.db"):
+
+def save_model_weights_to_db(experiment_id, weight_path, project_name, db_path="out/experiments.db"):
     """
-    Save the model weights' file path into the 'model_weights' table in the database.
+    Save the model weights' file path into the '<project_name>_model_weights' table in the database.
     """
+    table_name = f"{project_name}_model_weights"
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    cursor.execute("""
-    INSERT INTO model_weights (experiment_id, weight_path)
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        experiment_id INTEGER,
+        weight_path TEXT
+    );
+    """)
+
+    cursor.execute(f"""
+    INSERT INTO {table_name} (experiment_id, weight_path)
     VALUES (?, ?)
     """, (experiment_id, weight_path))
 
     conn.commit()
     conn.close()
-    print(f"Model weights saved at {weight_path} for Experiment ID: {experiment_id}")
+    print(f"Model weights saved at {weight_path} for Experiment ID: {experiment_id} in table: {table_name}")

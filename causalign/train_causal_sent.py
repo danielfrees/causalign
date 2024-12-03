@@ -31,6 +31,8 @@ def train_causal_sent(args):
     """
     seed_everything(args.seed)
     
+    project_name = args.project_name
+    
     # ====== Verbose Argument Printout ======
     print("\n" + "="*50)
     print("Running CausalSent Training with the following arguments:")
@@ -40,12 +42,11 @@ def train_causal_sent(args):
     
     # ====== Initialize Experiment Tracking DB ======
     initialize_database()
-    experiment_id = save_arguments_to_db(args)
+    experiment_id = save_arguments_to_db(args=args, project_name=project_name)
     
     # ======= Setup Tracking and Device ========
     # Initialize wandb
-    # !! TODO: change project name when running diff gridsearches !!
-    wandb.init(project="causal-sentiment-architecture-doublyrobust-sigmoidfix", config=args)
+    wandb.init(project=project_name, config=args)
     # Device setup
     device = torch.device("cuda" if torch.cuda.is_available() 
                         else "mps" if torch.backends.mps.is_available() 
@@ -66,7 +67,7 @@ def train_causal_sent(args):
 
         imdb_ds_train: IMDBDataset = IMDBDataset(imdb_train, 
                                         split="train",
-                                        args=args)
+                                        args = args)
         imdb_ds_val: IMDBDataset = IMDBDataset(imdb_val,
                                             split = "validation", 
                                             args = args)
@@ -83,7 +84,7 @@ def train_causal_sent(args):
         
         civil_ds_train: CivilCommentsDataset = CivilCommentsDataset(civil_train, 
                                                     split="train",
-                                                    args=args)
+                                                    args = args)
         civil_ds_val: CivilCommentsDataset = CivilCommentsDataset(civil_val,
                                                     split = "validation", 
                                                     args = args)
@@ -305,8 +306,8 @@ def train_causal_sent(args):
         # ==== Early Stopping and Checkpointing ====
         if early_stopper.highest_val_acc(val_acc):
             model_path = os.path.join("out", f"experiment_{experiment_id}", "best_model.pt")
-            save_model(model, optimizer, args, model_path)
-            save_model_weights_to_db(experiment_id, model_path)
+            save_model(model=model, optimizer=optimizer, args=args, filepath=model_path)
+            save_model_weights_to_db(experiment_id=experiment_id, weight_path=model_path, project_name=project_name)
         if early_stopper.early_stop(val_acc):
             break
         # ==== end epoch ====
@@ -359,9 +360,9 @@ def train_causal_sent(args):
             test_targets.extend(targets.cpu().numpy())
             test_predictions.extend(preds)
     
-    save_outputs_to_db(experiment_id, "train", train_targets, train_predictions)
-    save_outputs_to_db(experiment_id, "val", val_targets, val_predictions)
-    save_outputs_to_db(experiment_id, "test", test_targets, test_predictions)
+    save_outputs_to_db(experiment_id=experiment_id, split="train", targets=train_targets, predictions=train_predictions, project_name=project_name)
+    save_outputs_to_db(experiment_id=experiment_id, split="val", targets=val_targets, predictions=val_predictions, project_name=project_name)
+    save_outputs_to_db(experiment_id=experiment_id, split="test", targets=test_targets, predictions=test_predictions, project_name=project_name)
     
     # save final metrics to out/
     train_acc = accuracy_score(train_targets, train_predictions)
@@ -381,7 +382,7 @@ def train_causal_sent(args):
         "test_acc": test_acc,
         "test_f1": test_f1
     }
-    save_metrics_to_db(experiment_id, final_metrics)
+    save_metrics_to_db(experiment_id=experiment_id, metrics=final_metrics, project_name=project_name)
     wandb.log({f"{k}_final": v for k, v in final_metrics.items()})
 
     return

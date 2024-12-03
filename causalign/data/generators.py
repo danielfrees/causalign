@@ -105,8 +105,12 @@ class SimilarityDataset(Dataset):
         self.p = args
         self.max_length = args.max_seq_length
         self.split = split
+        self.treated_only = args.treated_only  # only use treated data for training (ATT instead of ATE)
         self.treatment_phrase = args.treatment_phrase  # treatment word for causal regularization
-        
+
+        if self.treated_only: # only include texts that include treatment phrase
+            self.texts = [text for text in self.texts if self.treatment_phrase in text]
+                        
         # ========= Tokenizer initialization =========
         self.tokenizer = None
         if args.pretrained_model_name in ['bert-base-uncased', 'meta-llama/Llama-3.1-8B']:
