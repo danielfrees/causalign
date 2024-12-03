@@ -81,9 +81,9 @@ class SimilarityDataset(Dataset):
 
         if args.adjust_ate:
             dataset = create_synthetic_dataset(dataset=dataset, 
-                                       fake_treatment_phrase=args.treatment_phrase,
-                                       prop_treated=args.ate_change_treat_prop,
-                                       diff_fake_ate=args.ate_change)
+                                    fake_treatment_phrase=args.treatment_phrase,
+                                    prop_treated=args.ate_change_treat_prop,
+                                    diff_fake_ate=args.ate_change)
 
         self.limit_data = args.limit_data  # limit data for testing/ faster performance 
         if self.limit_data > 0:
