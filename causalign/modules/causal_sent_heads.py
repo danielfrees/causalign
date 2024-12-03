@@ -45,7 +45,6 @@ def get_head(backbone_hidden_size: int,
             torch.nn.Dropout(dropout_prob),
             torch.nn.Linear(head_hidden_size // 2, 1)
         )
-    
     elif head_type == 'conv':
         head = torch.nn.Sequential(
             # Expect input shape: (batch_size, sequence_length, hidden_size)
