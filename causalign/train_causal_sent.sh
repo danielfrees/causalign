@@ -13,26 +13,26 @@
 # or 
 # 1.0, 0.1, 0.1
 
-#--treated_only  # to compute and use ATT
+#--treated_only  # to compute and use ATT #! dont use if running synthetic validations with  --adjust_ate
 
 python train_causal_sent.py \
     --project_name causal_sentiment_test_fake_ate_artichoke \
     --pretrained_model_name sentence-transformers/msmarco-distilbert-base-v4 \
-    --unfreeze_backbone top3 \
+    --unfreeze_backbone top0 \
     --riesz_head_type fcn \
     --sentiment_head_type fcn \
-    --epochs 10 \
-    --limit_data 4000 \
+    --epochs 30 \
+    --limit_data 1000 \
     --max_seq_length 150 \
-    --lr 1e-5 \
+    --lr 1e-4 \
     --treatment_phrase artichoke \
     --lambda_bce 0 \
     --lambda_reg 0 \
-    --lambda_riesz 1.0\
+    --lambda_riesz 0.1 \
     --dataset imdb \
     --log_every 5 \
     --running_ate \
-    --doubly_robust \
     --adjust_ate \
-    --adjust_change 0.5 \
-    --adjust_treat_pop 0.5 \
+    --synthetic_ate -0.75 \
+    --synthetic_ate_treat_fraction 0.5 \
+    --doubly_robust 

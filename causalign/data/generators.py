@@ -109,10 +109,10 @@ class SimilarityDataset(Dataset):
         
 
         if args.adjust_ate:
-            dataset = self.create_synthetic_dataset(dataset=dataset, 
-                                       fake_treatment_phrase=args.treatment_phrase,
-                                       prop_treated=args.ate_change_treat_prop,
-                                       diff_fake_ate=args.ate_change)
+            dataset = self.create_synthetic_dataset(
+                                fake_treatment_phrase=args.treatment_phrase,
+                                prop_treated=args.synthetic_ate_treat_fraction,
+                                target_fake_ate=args.synthetic_ate)
 
         self.p = args
         self.max_length = args.max_seq_length
@@ -239,52 +239,120 @@ class SimilarityDataset(Dataset):
     # ======== Create synthetic data for evaluation ========
     def create_synthetic_dataset(
             self,
-            fake_treatment_phrase: str = 'artichoke',
-            prop_treated: float = 0.4,
-            diff_fake_ate: float = 0.3,
+            fake_treatment_phrase: str,
+            prop_treated: float,
+            target_fake_ate: float,
             append_where: str = 'start',
             ignore_case: bool = True):
         
-        print(f"Creating synthetic data with change in ATE of {diff_fake_ate}, making {prop_treated} of the data treated")
+        print(f"Creating synthetic data with target ATE of {target_fake_ate}, making {prop_treated} of the data treated")
         
         if (prop_treated < 0) or (prop_treated > 1):
             raise ValueError(f"Please enter a synthetic proportion treated value between 0 and 1, given {prop_treated}")
-        if (diff_fake_ate < 0) or (diff_fake_ate > 1):
-            raise ValueError(f"Please enter a change in ATE between 0 and 1, given {diff_fake_ate}")
+        elif (int(prop_treated * len(self.texts)) < 1):
+            warnings.warn("Proportion of treated is very low. This will be the average treatment effect on the untreated. Synthetic ATE will be weird.")
+        elif (int((1-prop_treated)* len(self.texts)) < 1):
+            warnings.warn("Proportion of untreated is very low. This will be the averagetreatment effect on the treated (ATT). Synthetic ATE could be weird.")
+        if (target_fake_ate < -1) or (target_fake_ate > 1):
+            raise ValueError(f"Please enter a target ATE between -1 and 1, given {target_fake_ate}")
         
         n = len(self.texts)
         # randomly determine treated rows
         treated_indices = np.random.choice(n, int(np.round(n*prop_treated)), replace=False)
-
-        # add fake treatment word to text
-        self.texts = [self.treat_if_untreated(text, fake_treatment_phrase, append_where, ignore_case) for text in self.texts]
+        # Determine untreated rows (inverse of treated rows)
+        all_indices = np.arange(n)
+        untreated_indices = np.setdiff1d(all_indices, treated_indices)
+        
+        # add fake treatment word to text where to be treated
+        self.texts = [self.treat_if_untreated(text, fake_treatment_phrase, append_where, ignore_case) 
+                    for text in np.array(self.texts)[treated_indices]]
 
         # randomly flip outcomes to yield ATE of fake_ate
         treated_labels = torch.tensor(self.targets, dtype=float)[treated_indices]
+        untreated_labels = torch.tensor(self.targets, dtype=float)[untreated_indices]
         
-        prob_pos_label_given_treated = torch.mean(treated_labels)
-        prob_neg_label_given_treated = 1 - prob_pos_label_given_treated
+        # ==== Initial drawn ATE after adding the fake treatment word ====
+        prob_pos_label_given_treated = torch.mean(treated_labels)  # E[Y|T=1]
+        prob_pos_label_given_untreated = torch.mean(untreated_labels) # E[Y|T=0]
+        if len(treated_labels) == 0:
+            warnings.warn("No treated labels. Computing ATE as 0 - E[Y|T=0].")
+            current_fake_ate = 0 - prob_pos_label_given_untreated
+        elif len(untreated_labels) == 0:
+            warnings.warn("No untreated labels. Computing ATE as E[Y|T=1] - 0.")
+            current_fake_ate = prob_pos_label_given_treated - 0
+        else: # general case, normal ATE 
+            current_fake_ate = prob_pos_label_given_treated - prob_pos_label_given_untreated
+        print(f"Initial Synthetic ATE: {current_fake_ate}")
+        diff_fake_ate = target_fake_ate - current_fake_ate
+        print(f"Difference in Target - Initial ATE: {diff_fake_ate}")
 
-        if ((diff_fake_ate > 0) and (diff_fake_ate > prob_neg_label_given_treated)) or  ((diff_fake_ate < 0) and (diff_fake_ate < -prob_pos_label_given_treated)):
-            raise ValueError(f"Please enter a valid change in ATE, it must be between {-prob_pos_label_given_treated} and {prob_neg_label_given_treated}")
+        # ===== Manipulate data via label flipping to achieve synthetic target ATE ==== 
+        if diff_fake_ate == 0:
+            pass
+        elif diff_fake_ate > 0:  # we need to switch some treated negatives to positives, and/or untreated positives to negatives to increase causal effect
+            negative_treated_indices = torch.where(treated_labels == 0)[0]
+            max_increase_from_treated = len(negative_treated_indices) / len(treated_labels)
+            
+            if max_increase_from_treated < diff_fake_ate:
+                # switch some treated negatives to positives,
+                treated_labels[negative_treated_indices] = 1
+                diff_fake_ate -= max_increase_from_treated
+                
+                #print(f"Updated Diff Fake ATE after switching treated negs to pos: {diff_fake_ate}")
+    
+                # and some untreated positives to negatives
+                num_to_switch = int(np.round(diff_fake_ate * len(untreated_labels)))
+                positive_untreated_indices = torch.where(untreated_labels == 1)[0]  
+                switch_indices = np.random.choice(positive_untreated_indices, num_to_switch, replace=False)
+                untreated_labels[switch_indices] = 0
+                
+            else:  # prefer to only switch treated negatives to positives (TODO: this is a bit arbitrary)
+                num_to_switch = int(np.round(diff_fake_ate * len(treated_labels)))
+                switch_indices = np.random.choice(negative_treated_indices, num_to_switch, replace=False)
+                treated_labels[switch_indices] = 1
+                
+        else:  # diff_fake_ate < 0, we need to switch some untreated negatives to positives, and/or treated positives to negatives to decrease causal effect
+            positive_treated_indices = torch.where(treated_labels == 1)[0]  
+            max_decrease_from_treated = len(positive_treated_indices) / len(treated_labels)
+            
+            if diff_fake_ate < max_decrease_from_treated:
+                # switch some treated positives to negatives
+                treated_labels[positive_treated_indices] = 0
+                diff_fake_ate += max_decrease_from_treated
+                
+                #print(f"Updated Diff Fake ATE after switching pos to negs: {diff_fake_ate}")
+                
+                # and some untreated negatives to positives
+                num_to_switch = int(np.round(-diff_fake_ate * len(untreated_labels)))
+                negative_untreated_indices = np.where(untreated_labels == 0)[0]  
+                switch_indices = np.random.choice(negative_untreated_indices, num_to_switch, replace=False)
+                untreated_labels[switch_indices] = 1
+            else:  # prefer to only switch treated positives to negatives (TODO: this is a bit arbitrary)
+                num_to_switch = int(np.round(-diff_fake_ate * len(treated_labels)))
+                switch_indices = np.random.choice(positive_treated_indices, num_to_switch, replace=False)
+                treated_labels[switch_indices] = 0
+            
+        # ==== New ATE after flipping labels to achieve target ATE ====
+        prob_pos_label_given_treated = torch.mean(treated_labels)  # E[Y|T=1]
+        prob_pos_label_given_untreated = torch.mean(untreated_labels) # E[Y|T=0]
+        if len(treated_labels) == 0:
+            warnings.warn("No treated labels. Computing ATE as 0 - E[Y|T=0].")
+            current_fake_ate = 0 - prob_pos_label_given_untreated
+        elif len(untreated_labels) == 0:
+            warnings.warn("No untreated labels. Computing ATE as E[Y|T=1] - 0.")
+            current_fake_ate = prob_pos_label_given_treated - 0
+        else: # general case, normal ATE 
+            current_fake_ate = prob_pos_label_given_treated - prob_pos_label_given_untreated
+        current_fake_ate = prob_pos_label_given_treated - prob_pos_label_given_untreated
+        print(f"Manipulated Synthetic ATE: {current_fake_ate}")
 
-        switch_num = int(np.round(diff_fake_ate * len(treated_labels)))
-        if diff_fake_ate > 0:
-            indices_neg_label_treated = torch.nonzero(treated_labels == 0).squeeze()
-            switch_indices = np.random.choice(indices_neg_label_treated, switch_num, replace=False)
-
-            treated_labels[switch_indices] = 1
-        else:
-            indices_pos_label_treated = torch.nonzero(treated_labels == 1).squeeze()
-            switch_indices = np.random.choice(indices_pos_label_treated, switch_num, replace=False)
-
-            treated_labels[switch_indices] = 0
-
+        # ==== Update the targets to match the synthetic target ATE ====
         temp_targets = np.array(self.targets)
-
         temp_targets[treated_indices] = treated_labels
-
+        temp_targets[untreated_indices] = untreated_labels
         self.targets = list(temp_targets)
+        
+        return 
 
             
     def __len__(self):
