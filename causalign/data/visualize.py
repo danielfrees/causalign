@@ -11,13 +11,15 @@ import matplotlib.pyplot as plt
 
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname((__file__))), "out", "experiments.db"))
 
-def load_data_from_db(table_name, db_path=DB_PATH):
+def load_data_from_db(table_name, project_name, db_path=DB_PATH):
     """
-    Load data from a specified table in the SQLite database.
-    
+    Load data from a namespaced table in the SQLite database.
+
     Parameters:
     - table_name: str
-        Name of the table to load data from.
+        Base name of the table to load data from (e.g., "arguments", "metrics").
+    - project_name: str
+        Name of the project to namespace the table.
     - db_path: str
         Path to the SQLite database file.
 
@@ -25,10 +27,15 @@ def load_data_from_db(table_name, db_path=DB_PATH):
     - pandas.DataFrame
         Loaded data as a DataFrame.
     """
+    namespaced_table_name = f"{project_name}_{table_name}"
     conn = sqlite3.connect(db_path)
-    query = f"SELECT * FROM {table_name}"
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    query = f"SELECT * FROM {namespaced_table_name}"
+    try:
+        df = pd.read_sql_query(query, conn)
+    except Exception as e:
+        raise ValueError(f"Failed to load data from table '{namespaced_table_name}': {e}")
+    finally:
+        conn.close()
     return df
 
 
