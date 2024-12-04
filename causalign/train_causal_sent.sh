@@ -16,21 +16,22 @@
 #--treated_only  # to compute and use ATT #! dont use if running synthetic validations with  --adjust_ate
 
 python train_causal_sent.py \
-    --project_name causal_sentiment_test_fake_ate_artichoke \
+    --project_name causal_sentiment_synthetic_artichoke_neg075 \
     --pretrained_model_name sentence-transformers/msmarco-distilbert-base-v4 \
     --unfreeze_backbone top0 \
-    --riesz_head_type fcn \
-    --sentiment_head_type fcn \
+    --riesz_head_type linear \
+    --sentiment_head_type linear \
     --epochs 30 \
-    --limit_data 1000 \
-    --max_seq_length 150 \
-    --lr 1e-4 \
+    --limit_data 0 \
+    --max_seq_length 250 \
+    --lr 1e-5 \
     --treatment_phrase artichoke \
     --lambda_bce 0 \
     --lambda_reg 0 \
     --lambda_riesz 0.1 \
+    --lambda_l1 0.01 \
     --dataset imdb \
-    --log_every 5 \
+    --log_every 100 \
     --running_ate \
     --adjust_ate \
     --synthetic_ate -0.75 \

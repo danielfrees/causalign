@@ -71,7 +71,7 @@ class RieszHead(torch.nn.Module):
                 hidden_size: int,  
                 head_type: str):
         super().__init__()
-        self.backbone_hidden_size= backbone_hidden_size
+        self.backbone_hidden_size = backbone_hidden_size
         self.head = get_head(backbone_hidden_size, hidden_size, head_type)
         
     def forward(self, backbone_embedding):

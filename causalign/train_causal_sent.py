@@ -100,6 +100,7 @@ def train_causal_sent(args):
     lambda_bce: float = args.lambda_bce
     lambda_reg: float = args.lambda_reg
     lambda_riesz: float = args.lambda_riesz
+    lambda_l1: float = args.lambda_l1
     batch_size: int = args.batch_size
     epochs: int = args.epochs
     log_every: int = args.log_every
@@ -226,13 +227,15 @@ def train_causal_sent(args):
                     riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
                     reg_loss = torch.mean(((sentiment_outputs_treated - sentiment_outputs_control) - tau_hat) ** 2)
                     bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
-                    loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
+                    l1_loss = sum(torch.sum(torch.abs(param)) for param in model.parameters())  # L1 loss on all model parameters
+                    loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss + lambda_l1 * l1_loss
             else:
                 # Compute losses without autocast
                 riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
                 reg_loss = torch.mean(((sentiment_outputs_treated - sentiment_outputs_control) - tau_hat) ** 2)
                 bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
-                loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss
+                l1_loss = sum(torch.sum(torch.abs(param)) for param in model.parameters())  # L1 loss on all model parameters
+                loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss + lambda_l1 * l1_loss
 
             if args.autocast:
                 # scale gradients to avoid underflow/overflow if autocasting
