@@ -23,7 +23,7 @@ python train_causal_sent.py \
     --sentiment_head_type linear \
     --epochs 30 \
     --limit_data 0 \
-    --max_seq_length 250 \
+    --max_seq_length 50\
     --lr 1e-5 \
     --treatment_phrase artichoke \
     --lambda_bce 0 \
