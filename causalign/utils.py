@@ -130,7 +130,7 @@ def get_default_sent_training_args(regime: str):
             parser.add_argument("--lambda_bce", type=float, default=1.0, help="Weight for the BCE loss term.")
             parser.add_argument("--lambda_reg", type=float, default=0.1, help="Weight for the regularization loss term.")
             parser.add_argument("--lambda_riesz", type=float, default=0.1, help="Weight for the Riesz loss term.")
-            parser.add_argument("--lambda_l1", type=float, default=0.01, help="Weight for the L1 loss term.")
+            parser.add_argument("--lambda_l1", type=float, default=1e-5, help="Weight for the L1 loss term.")
             # recommend passing the following
             parser.add_argument("--running_ate", action='store_true', default=False, help="Whether to track a running average or batch average to compute the Riesz regression ATE.")
             parser.add_argument("--doubly_robust", action='store_true', default=False, help="Whether to use doubly robust estimation for the Riesz regression ATE.")
