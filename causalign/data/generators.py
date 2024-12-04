@@ -313,12 +313,12 @@ class SimilarityDataset(Dataset):
                 
         else:  # diff_fake_ate < 0, we need to switch some untreated negatives to positives, and/or treated positives to negatives to decrease causal effect
             positive_treated_indices = torch.where(treated_labels == 1)[0]  
-            max_decrease_from_treated = len(positive_treated_indices) / len(treated_labels)
+            max_decrease_from_treated = -len(positive_treated_indices) / len(treated_labels)
             
             if diff_fake_ate < max_decrease_from_treated:
                 # switch some treated positives to negatives
                 treated_labels[positive_treated_indices] = 0
-                diff_fake_ate += max_decrease_from_treated
+                diff_fake_ate -= max_decrease_from_treated
                 
                 #print(f"Updated Diff Fake ATE after switching pos to negs: {diff_fake_ate}")
                 

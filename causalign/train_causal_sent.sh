@@ -16,7 +16,7 @@
 #--treated_only  # to compute and use ATT #! dont use if running synthetic validations with  --adjust_ate
 
 python train_causal_sent.py \
-    --project_name causal_sentiment_synthetic_artichoke_neg075 \
+    --project_name causal_sentiment_synthetic_artichoke_pos075 \
     --pretrained_model_name sentence-transformers/msmarco-distilbert-base-v4 \
     --unfreeze_backbone top0 \
     --riesz_head_type linear \
@@ -34,6 +34,6 @@ python train_causal_sent.py \
     --log_every 100 \
     --running_ate \
     --adjust_ate \
-    --synthetic_ate -0.75 \
+    --synthetic_ate 0.75 \
     --synthetic_ate_treat_fraction 0.5 \
     --doubly_robust 
