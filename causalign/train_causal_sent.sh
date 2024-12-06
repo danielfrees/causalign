@@ -29,7 +29,7 @@ python train_causal_sent.py \
     --lambda_bce 0 \
     --lambda_reg 0 \
     --lambda_riesz 0.1 \
-    --lambda_l1 1e-5 \
+    --lambda_l1 1e-4 \
     --dataset imdb \
     --log_every 100 \
     --running_ate \
