@@ -275,3 +275,48 @@ class CausalSent(torch.nn.Module):
                 raise ValueError("[ERROR] No valid embeddings found for sentiment head.")
 
             return sentiment_output_real
+        
+    # ==== components for partial freezing/ unfreezing ====
+    # needed for interleaved training, riesz-only training, etc.   
+    def freeze_component(self, component_name: str):
+        """
+        Freezes the parameters of the specified component and stores the original
+        requires_grad state in self.frozen_grad_masks.
+
+        Parameters:
+        - component_name (str): The name of the component to freeze ('backbone', 'riesz', 'sentiment').
+        """
+        if component_name not in ["backbone_riesz", "backbone_sentiment", "riesz", "sentiment"]:
+            raise ValueError(f"Invalid component name: {component_name}. Must be one of 'backbone_riesz', 'backbone_sentiment', 'riesz', or 'sentiment'.")
+
+        component = getattr(self, component_name)
+        
+        # Store the original requires_grad state in a mask
+        grad_mask = {name: param.requires_grad for name, param in component.named_parameters()}
+        self.frozen_grad_masks[component_name] = grad_mask
+        
+        # Freeze the component
+        for param in component.parameters():
+            param.requires_grad = False
+
+    def unfreeze_component(self, component_name: str):
+        """
+        Unfreezes the parameters of the specified component, restoring the original
+        requires_grad state from self.frozen_grad_masks.
+
+        Parameters:
+        - component_name (str): The name of the component to unfreeze ('backbone', 'riesz', 'sentiment').
+        """
+        if component_name not in self.frozen_grad_masks:
+            raise ValueError(f"No frozen state found for component '{component_name}'. Did you call freeze_component first?")
+        
+        component = getattr(self, component_name)
+        grad_mask = self.frozen_grad_masks[component_name]
+        
+        # Restore the original requires_grad state
+        for name, param in component.named_parameters():
+            if name in grad_mask:
+                param.requires_grad = grad_mask[name]
+
+        # Clean up the mask to avoid unnecessary memory usage
+        del self.frozen_grad_masks[component_name]
