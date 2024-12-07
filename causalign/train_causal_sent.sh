@@ -16,7 +16,7 @@
 #--treated_only  # to compute and use ATT #! dont use if running synthetic validations with  --adjust_ate
 
 python train_causal_sent.py \
-    --project_name causal_sentiment_synthetic_artichoke_neg025 \
+    --project_name test_interleave_synthetic_broccoli_neg025 \
     --pretrained_model_name sentence-transformers/msmarco-distilbert-base-v4 \
     --unfreeze_backbone top0 \
     --riesz_head_type linear \
@@ -25,10 +25,10 @@ python train_causal_sent.py \
     --limit_data 0 \
     --max_seq_length 50\
     --lr 1e-5 \
-    --treatment_phrase artichoke \
+    --treatment_phrase broccoli \
     --lambda_bce 0.1 \
-    --lambda_reg 0.01 \
-    --lambda_riesz 0.1 \
+    --lambda_reg 0 \
+    --lambda_riesz 1.0 \
     --lambda_l1 1e-4 \
     --dataset imdb \
     --log_every 100 \
@@ -36,4 +36,5 @@ python train_causal_sent.py \
     --adjust_ate \
     --synthetic_ate -0.25 \
     --synthetic_ate_treat_fraction 0.5 \
-    --doubly_robust 
+    --doubly_robust \
+    --interleave_training

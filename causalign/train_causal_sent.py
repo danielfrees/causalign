@@ -23,6 +23,7 @@ from causalign.utils import (save_model, load_model_inference,
                     process_unfreeze_param)
 import wandb
 import pandas as pd
+import warnings
 
 
 def train_causal_sent(args):
@@ -30,6 +31,13 @@ def train_causal_sent(args):
     Dataset preparation and training loop for the CausalSent model.
     """
     seed_everything(args.seed)
+    
+    # ====== Check Args ========
+    if not args.interleave_training and args.lambda_reg > 0:
+        warnings.warn("Regularization loss is enabled but interleave_training is disabled. Competing objectives will yield bad ATEs and bad model.")
+        
+    if args.interleave_training and not args.running_ate:
+        raise ValueError("Interleaved training requires running_ate to be enabled. Pass --running_ate. We need a running ATE to compute the epoch ATEs for interleaved training.")
     
     project_name = args.project_name
     
@@ -103,11 +111,21 @@ def train_causal_sent(args):
     lambda_l1: float = args.lambda_l1
     batch_size: int = args.batch_size
     epochs: int = args.epochs
+    
+    # ======== Setup Interleaved Training if Req =========
+    sentiment_epochs = None
+    riesz_epochs = None
+    if args.interleave_training:
+        sentiment_epochs = {epoch: (epoch % 2 == 0) for epoch in range(epochs)}   # even epochs for sentiment, start w sentiment
+        riesz_epochs = {epoch: (epoch % 2 != 0) for epoch in range(epochs)}   # odd epochs for riesz
+    
     log_every: int = args.log_every
     running_ate: bool = args.running_ate # whether to track a running average or batch average to compute the RR ATE
     pretrained_model_name: str = args.pretrained_model_name
     lr: float = args.lr
     doubly_robust: bool = args.doubly_robust # whether to use doubly robust estimation of ATE
+    
+    
     
     # DataLoaders
     train_loader = DataLoader(ds_train, batch_size=batch_size, shuffle=True, collate_fn=SimilarityDataset.collate_fn)
@@ -132,13 +150,15 @@ def train_causal_sent(args):
     else:
         raise ValueError("unfreeze_backbone parsed badly: {args.unfreeze_backbone}")
     
-    # TODO: add in peft LoRA config stuff and pass to model for the backbone
-    
+    # Optimizer and BCE (sentiment) loss    
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     bce_loss = torch.nn.BCEWithLogitsLoss()
 
     # ===== scale gradients for mixed precision training =====
     scaler = GradScaler() if args.autocast else None
+    
+    # track full epoch ATE estimates
+    epoch_ate: float = None
     
     # ================ Training Loop =================
     early_stopper = EarlyStopper(patience=args.early_stop_patience, delta=args.early_stop_delta)
@@ -157,6 +177,40 @@ def train_causal_sent(args):
             if epoch_fraction > fraction_to_unfreeze:
                 fraction_to_unfreeze = epoch_fraction
                 percent_trainable_params = model.unfreeze_backbone_fraction(fraction_to_unfreeze)  # only unfreeze when something changes (not a bug otherwise, just waste of time)
+                
+        # ========= Interleaved Training ==========
+        training_sentiment: bool = False
+        training_reg: bool = False
+        training_riesz: bool = False
+        if args.interleave_training:
+            if sentiment_epochs[epoch]:
+                print("[Interleaved Training] Training Sentiment Head")
+                model.sentiment.requires_grad = True
+                model.riesz.requires_grad = False
+                
+                lambda_riesz = 0 # no riesz loss when training sentiment head
+                lambda_bce = args.lambda_bce
+                lambda_reg = args.lambda_reg
+                
+                training_sentiment = True
+                training_reg = True 
+
+                if epoch == 0:  # don't regularize on the first epoch, we dont have a RR yet!
+                    lambda_reg = 0
+                    training_reg = False
+                
+            elif riesz_epochs[epoch]:
+                print("[Interleaved Training] Training Riesz Head")
+                model.sentiment.requires_grad = False
+                model.riesz.requires_grad = True
+                
+                lambda_riesz = args.lambda_riesz
+                lambda_bce = 0 # no sentiment loss when training riesz head
+                lambda_reg = 0 # no regularization loss when training riesz head
+                
+                training_riesz = True
+            else: 
+                raise ValueError("Epoch not in sentiment or riesz epochs")
         
         for i, batch in enumerate(train_loader):
             input_ids_real = batch['input_ids_real'].to(device)
@@ -179,9 +233,9 @@ def train_causal_sent(args):
                 attention_mask_treated,
                 attention_mask_control,
             )
-
-            # TODO: update this to use doubly robust as an option, 
-            # remove direct targets option, it should be using the estimates 
+            treat_out = torch.sigmoid(sentiment_outputs_treated)
+            control_out = torch.sigmoid(sentiment_outputs_control)
+            real_out = torch.sigmoid(sentiment_outputs_real)
             
             # Compute tau_hat (estimated average treatment effect (ATE) of the 
             # selected treatment_phrase as estimated by a riesz representation
@@ -190,53 +244,74 @@ def train_causal_sent(args):
             # note, whenever computing g (our estimate of the oracle sentiment analysis function)
             # we must apply sigmoid to the logits, otherwise treatment effects become nonsense 
             # in the binary sentiment domain 
-            if running_ate:
-                # Compute batch-level numerator and denominator
-                batch_numer = None
-                batch_denom = None
-                if doubly_robust:
-                    # TE_direct = g(X_i, 1) - g(X_i, 0), averaged later -> ATE_DIRECT
-                    direct_te = torch.sigmoid(sentiment_outputs_treated) - torch.sigmoid(sentiment_outputs_control)
-                    # TE_doublyrobust = TE_direct + RR(Z) * (Y - g(Z)), -> sum, -> averaged later by denom -> DR_ATE_DIRECT
-                    batch_numer = torch.sum(direct_te + riesz_outputs_real * (targets - torch.sigmoid(sentiment_outputs_real)))
+            if not (args.interleave_training and training_sentiment):
+                if running_ate:
+                    # Compute batch-level numerator and denominator
+                    batch_numer = None
+                    batch_denom = None
+                    if doubly_robust:
+                        # TE_direct = g(X_i, 1) - g(X_i, 0), averaged later -> ATE_DIRECT
+                        direct_te = treat_out - control_out
+                        # TE_doublyrobust = TE_direct + RR(Z) * (Y - g(Z)), -> sum, -> averaged later by denom -> DR_ATE_DIRECT
+                        batch_numer = torch.sum(direct_te + riesz_outputs_real * (targets - real_out))
+                    else:
+                        # RR(Z) * g(Z)  -- r.r. ATE, not doubly robust, averaged later
+                        batch_numer = torch.sum(riesz_outputs_real * real_out)
+                        
+                    batch_denom = riesz_outputs_real.size(0)  # Batch size for E_n[.]
+
+                    # Update the running numerator and denominator
+                    running_ate_numer += batch_numer.item()
+                    running_ate_denom += batch_denom
+
+                    # Recompute tau_hat as the mean
+                    tau_hat = torch.Tensor([running_ate_numer / running_ate_denom]).to(device)
                 else:
-                    # RR(Z) * g(Z)  -- r.r. ATE, not doubly robust, averaged later
-                    batch_numer = torch.sum(riesz_outputs_real * torch.sigmoid(sentiment_outputs_real))
-                    
-                batch_denom = riesz_outputs_real.size(0)  # Batch size for E_n[.]
-
-                # Update the running numerator and denominator
-                running_ate_numer += batch_numer.item()
-                running_ate_denom += batch_denom
-
-                # Recompute tau_hat as the mean
-                tau_hat = torch.Tensor([running_ate_numer / running_ate_denom]).to(device)
-            else:
+                    tau_hat = None
+                    if doubly_robust:
+                        # ATE_direct = E_n[g(X_i, 1), g(X_i, 0)]
+                        direct_ate = torch.mean(treat_out - control_out)
+                        # ATE_doublyrobust = ATE_direct + E_n[RR(Z) * (Y - g(Z))]
+                        tau_hat = direct_ate + torch.mean(riesz_outputs_real * (targets - real_out))
+                    else:
+                        # E_n[RR(Z) * g_0(Z)]  -- r.r. ATE, not doubly robust
+                        tau_hat = torch.mean(riesz_outputs_real * real_out)
+            elif training_reg: # if training sentiment head AND regularization, tau_hat should use the previous epoch_ate. Only when past the two warmup epochs and training reg
+                tau_hat = torch.Tensor([epoch_ate]).to(device)
+            else: # first sentiment epoch, no tau_hat yet and no regularization loss
+                if not epoch == 0: 
+                    raise ValueError("All epochs other than 0 should have a tau_hat. Something went wrong.")
                 tau_hat = None
-                if doubly_robust:
-                    # ATE_direct = E_n[g(X_i, 1), g(X_i, 0)]
-                    direct_ate = torch.mean(torch.sigmoid(sentiment_outputs_treated) - torch.sigmoid(sentiment_outputs_control))
-                    # ATE_doublyrobust = ATE_direct + E_n[RR(Z) * (Y - g(Z))]
-                    tau_hat = direct_ate + torch.mean(riesz_outputs_real * (targets - torch.sigmoid(sentiment_outputs_real)))
-                else:
-                    # E_n[RR(Z) * g_0(Z)]  -- r.r. ATE, not doubly robust
-                    tau_hat = torch.mean(riesz_outputs_real * torch.sigmoid(sentiment_outputs_real))
             
             if args.autocast:
                 with autocast(device_type=str(device), dtype=torch.bfloat16):  # Use autocast for MPS
-                    riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
-                    reg_loss = torch.mean(((torch.sigmoid(sentiment_outputs_treated) - torch.sigmoid(sentiment_outputs_control)) - tau_hat) ** 2)
-                    bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
+                    riesz_loss = 0 
+                    reg_loss = 0
+                    bce = 0
+                    l1_loss = 0
+                    if lambda_riesz > 0:
+                        riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
+                    if lambda_reg > 0:
+                        reg_loss = torch.mean(((treat_out - control_out) - tau_hat) ** 2)
+                    if lambda_bce > 0:
+                        bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
                     l1_loss = sum(torch.sum(torch.abs(param)) for param in model.parameters() if param.requires_grad)    # L1 loss on trainable params
                     loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss + lambda_l1 * l1_loss
             else:
                 # Compute losses without autocast
-                riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
-                reg_loss = torch.mean(((torch.sigmoid(sentiment_outputs_treated) - torch.sigmoid(sentiment_outputs_control)) - tau_hat) ** 2)
-                bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
+                riesz_loss = 0 
+                reg_loss = 0
+                bce = 0
+                l1_loss = 0
+                if lambda_riesz > 0:
+                    riesz_loss = torch.mean(-2 * (riesz_outputs_treated - riesz_outputs_control) + (riesz_outputs_real ** 2))
+                if lambda_reg > 0:
+                    reg_loss = torch.mean(((treat_out - control_out) - tau_hat) ** 2)
+                if lambda_bce > 0:
+                    bce = bce_loss(sentiment_outputs_real.squeeze(), targets)
                 l1_loss = sum(torch.sum(torch.abs(param)) for param in model.parameters() if param.requires_grad)    # L1 loss on trainable params
                 loss = lambda_bce * bce + lambda_reg * reg_loss + lambda_riesz * riesz_loss + lambda_l1 * l1_loss
-
+                
             if args.autocast:
                 # scale gradients to avoid underflow/overflow if autocasting
                 scaler.scale(loss).backward()
@@ -263,10 +338,14 @@ def train_causal_sent(args):
                         {"Train Loss": loss.item(), 
                             "Train Accuracy": train_acc, 
                             "Train F1": train_f1, 
-                            f"Tau_Hat_{args.treatment_phrase}": tau_hat.item(),
+                            f"Tau_Hat_{args.treatment_phrase}": tau_hat.item() if tau_hat else None,
                             "Batch": i + 1, 
                             "Backbone %Trainable": percent_trainable_params['trainable_backbone'],
-                            "Model %Trainable": percent_trainable_params['trainable_model']
+                            "Model %Trainable": percent_trainable_params['trainable_model'],
+                            "BCE Loss": bce.item() if bce else None,
+                            "Reg Loss": reg_loss.item() if reg_loss else None,
+                            "Riesz Loss": riesz_loss.item() if riesz_loss else None,
+                            "L1 Loss": l1_loss.item() if l1_loss else None
                         }, 
                         )
                 print(
@@ -275,11 +354,17 @@ def train_causal_sent(args):
                     f"Loss: {loss.item():.4f}, "
                     f"Accuracy: {train_acc:.4f}, "
                     f"F1: {train_f1:.4f}, "
-                    f"Tau_Hat_{args.treatment_phrase}: {tau_hat.item():.4f}, "
+                    f"Tau_Hat_{args.treatment_phrase}: {f'{tau_hat.item():.4f}' if tau_hat is not None else 'None'}, "
                     f"Backbone %Trainable: {percent_trainable_params['trainable_backbone']}, "
                     f"Model %Trainable: {percent_trainable_params['trainable_model']},"
                 )
-                
+
+        # ====** end of epoch stuff **====
+        
+        # ====== Full Epoch ATE is the running ATE at end of Riesz epoch ======
+        if training_riesz:
+            epoch_ate = running_ate_numer / running_ate_denom
+        
         # ======= Validation Metrics (Log Every Epoch) =======
         model.eval()
         val_targets, val_predictions = [], []
@@ -300,6 +385,8 @@ def train_causal_sent(args):
         val_acc = accuracy_score(val_targets, val_predictions)
         val_f1 = f1_score(val_targets, val_predictions)
         wandb.log({"Val Accuracy": val_acc, "Val F1": val_f1, "Epoch": epoch + 1})
+        if running_ate:
+            wandb.log({f"Epoch_ATE_{args.treatment_phrase}": epoch_ate})
         print(f"Epoch {epoch + 1}/{epochs} Validation Accuracy: {val_acc:.4f}, F1: {val_f1:.4f}")  
         
         # ==== Early Stopping and Checkpointing ====

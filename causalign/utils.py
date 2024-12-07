@@ -131,9 +131,14 @@ def get_default_sent_training_args(regime: str):
             parser.add_argument("--lambda_reg", type=float, default=0.1, help="Weight for the regularization loss term.")
             parser.add_argument("--lambda_riesz", type=float, default=0.1, help="Weight for the Riesz loss term.")
             parser.add_argument("--lambda_l1", type=float, default=1e-5, help="Weight for the L1 loss term.")
+            
             # recommend passing the following
             parser.add_argument("--running_ate", action='store_true', default=False, help="Whether to track a running average or batch average to compute the Riesz regression ATE.")
             parser.add_argument("--doubly_robust", action='store_true', default=False, help="Whether to use doubly robust estimation for the Riesz regression ATE.")
+            
+            # for interleaved training (riesz, sentiment(+reg) alternate training/ being frozen for stability)
+            parser.add_argument("--interleave_training", action='store_true', default = False, help = "Whether to alternate training between Riesz and Sentiment tasks. Starts on Sentiment. ATE estimates frozen at the end of each Riesz round. Make sure to pass --running_ate so that the frozen ATE is taken over the full batch.")
+            
         elif regime == 'intervention_sent':
             raise NotImplementedError("Intervention sentiment training not yet implemented.")
         else:
