@@ -1,6 +1,5 @@
 # CausalSent
-Extension of Bansal et al. (2023)'s work using Riesz Representer learning to estimate
-average treatment effect of words on sentiment outputs. Regularization of 
+Riesz Representer learning to estimate average treatment effect of words on sentiment outputs. Regularization of 
 sentiment modeling based on adherence to running average ATE. Architecture optimizations
 + modularization + realistic data augmentation are a few of the critical extensions 
 of the original experimental work. 
@@ -9,11 +8,15 @@ This repo is very much in development, but should be robustly implemented for fu
 as long as data preparation is implemented for new datasets similarly to IMDB/ 
 CivilComments. 
 
-To run the current (quick, limited data, overfitting) experiment, run: 
+Extension of Bansal et al. (2023)'s work using 
+
+To run one currently investigated experiment, run: 
 
 ```bash
 $ ./train_causal_sent.sh
 ```
+
+Extension of Bansal et al. (2023)'s work [TODO: add .bib]
 
 
 # CausAlign (deprecated)
