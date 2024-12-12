@@ -1,5 +1,5 @@
 """ 
-Constants for the causalign package. 
+Constants for the causalsent package. 
 """
 
 import os 
@@ -14,7 +14,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 if not HF_TOKEN:
     raise ValueError("Please set your Hugging Face token as an environment variable HF_TOKEN")
 
-CAUSALIGN_DIR = os.path.dirname(os.path.dirname(os.path.abspath("__file__")))
+CAUSALSENT_DIR = os.path.dirname(os.path.dirname(os.path.abspath("__file__")))
 CITING_ID_COL = "citingpaperid"
 CITED_ID_COL = "citedpaperid"
 NEGATIVE_ID_COL = "negativepaperid"

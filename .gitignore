@@ -168,5 +168,5 @@ wandb/
 acl_data/
 
 # out other than out/README.md
-causalign/out/*
-!causalign/out/README.md
+causalsent/out/*
+!causalsent/out/README.md

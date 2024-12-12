@@ -4,14 +4,14 @@ import os
 import sys
 from tqdm.auto import tqdm
 from typing import Dict, List, Tuple
-from datasets import Dataset, load_dataset
-from causalign.constants import CAUSALIGN_DIR, CITING_ID_COL, CITED_ID_COL, NEGATIVE_ID_COL, CORPUS_ID_COL, ACL_DATA_DIR
+from datasets import Dataset, load_dataset, concatenate_datasets
+from causalsent.constants import CAUSALSENT_DIR, CITING_ID_COL, CITED_ID_COL, NEGATIVE_ID_COL, CORPUS_ID_COL, ACL_DATA_DIR
 
 
 def load_acl_data(citation_file: str = 'acl_full_citations.parquet', 
         pub_info_file: str = 'acl-publication-info.74k.v2.parquet', 
         row_limit: int = None)->List[Tuple]:
-    data_directory = os.path.join(CAUSALIGN_DIR, ACL_DATA_DIR)
+    data_directory = os.path.join(CAUSALSENT_DIR, ACL_DATA_DIR)
 
     print(f"Loading data from {data_directory}")
     df_cit = pd.read_parquet(os.path.join(data_directory, citation_file))
@@ -85,6 +85,23 @@ def load_imdb_data(split: str,
     return imdb_ds
 
 def load_civil_comments_data(split: str,
-                civil_comments_data_source: str = "google/civil_comments")->Dataset:
+                civil_comments_data_source: str = "google/civil_comments"):
     civil_ds = load_dataset(civil_comments_data_source, split=split)
+    # map to binary toxicity by toxicity > 0. Heuristic, but makes sense
+    # based on the rare distn of non-zeros. Unclear what Bansal did. 
+    # They do resample to make even + subsample around their heuristic treatment words (kill)
+    civil_ds = civil_ds.map(lambda x: {'toxicity': 1 if x['toxicity'] > 0 else 0})
+    
+    # subsample to balance classes
+    civil_ds = civil_ds.shuffle(seed=328)
+    num_toxic = civil_ds.filter(lambda x: x['toxicity'] == 1).num_rows
+    num_nontoxic = civil_ds.filter(lambda x: x['toxicity'] == 0).num_rows
+    min_class_size = min(num_toxic, num_nontoxic)
+    
+    toxic_ds = civil_ds.filter(lambda x: x['toxicity'] == 1).select(range(min_class_size))
+    nontoxic_ds = civil_ds.filter(lambda x: x['toxicity'] == 0).select(range(min_class_size))
+
+    # Concatenate the subsampled datasets using concatenate_datasets
+    civil_ds = concatenate_datasets([toxic_ds, nontoxic_ds])
+    
     return civil_ds

@@ -12,11 +12,11 @@ import torch
 from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
 from sklearn.metrics import accuracy_score, f1_score
-from causalign.data.utils import load_imdb_data, load_civil_comments_data
-from causalign.data.generators import IMDBDataset, CivilCommentsDataset
-from causalign.modules.causal_sent import CausalSent
-from causalign.data.generators import SimilarityDataset
-from causalign.utils import (save_model, load_model_inference, 
+from causalsent.data.utils import load_imdb_data, load_civil_comments_data
+from causalsent.data.generators import IMDBDataset, CivilCommentsDataset
+from causalsent.modules.causal_sent import CausalSent
+from causalsent.data.generators import SimilarityDataset
+from causalsent.utils import (save_model, load_model_inference, 
                     get_default_sent_training_args, seed_everything, 
                     EarlyStopper, initialize_database, save_arguments_to_db,
                     save_metrics_to_db, save_model_weights_to_db, save_outputs_to_db,
@@ -152,7 +152,7 @@ def train_causal_sent(args):
     
     # Optimizer and BCE (sentiment) loss    
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
-    bce_loss = torch.nn.BCEWithLogitsLoss()
+    bce_loss = torch.nn.BCEWithLogitsLoss()  # for binary IMDB labels
 
     # ===== scale gradients for mixed precision training =====
     scaler = GradScaler() if args.autocast else None
@@ -179,9 +179,9 @@ def train_causal_sent(args):
                 percent_trainable_params = model.unfreeze_backbone_fraction(fraction_to_unfreeze)  # only unfreeze when something changes (not a bug otherwise, just waste of time)
                 
         # ========= Interleaved Training ==========
-        training_sentiment: bool = False
-        training_reg: bool = False
-        training_riesz: bool = False
+        training_sentiment: bool = True
+        training_reg: bool = True
+        training_riesz: bool = True
         if args.interleave_training:
             if sentiment_epochs[epoch]:
                 print("[Interleaved Training] Training Sentiment Head")
@@ -192,8 +192,7 @@ def train_causal_sent(args):
                 lambda_bce = args.lambda_bce
                 lambda_reg = args.lambda_reg
                 
-                training_sentiment = True
-                training_reg = True 
+                training_riesz = False
 
                 if epoch == 0:  # don't regularize on the first epoch, we dont have a RR yet!
                     lambda_reg = 0
@@ -208,7 +207,8 @@ def train_causal_sent(args):
                 lambda_bce = 0 # no sentiment loss when training riesz head
                 lambda_reg = 0 # no regularization loss when training riesz head
                 
-                training_riesz = True
+                training_reg = False
+                training_sentiment = False
             else: 
                 raise ValueError("Epoch not in sentiment or riesz epochs")
         

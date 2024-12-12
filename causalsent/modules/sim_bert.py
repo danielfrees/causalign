@@ -1,5 +1,5 @@
 """ 
-`bert_pretrained.py` contains the distilled BERT model used for CausAlign modeling.
+`bert_pretrained.py` contains the distilled BERT model used for CausalSent modeling.
 
 Frozen encoder serves as the pre-trained reference for word 'causal effect' 
 regularization techniques. Non-frozen encoder trained as normal. 

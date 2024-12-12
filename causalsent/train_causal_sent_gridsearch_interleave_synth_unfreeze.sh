@@ -1,12 +1,12 @@
 #!/bin/bash
 
 PRETRAINED_MODELS=("sentence-transformers/msmarco-distilbert-base-v4")  # "meta-llama/Llama-3.1-8B"
-UNFREEZE_BACKBONES=("top0")
+UNFREEZE_BACKBONES=("top1")
 RIESZ_HEAD_TYPES=("linear")
-LAMBDAS_BCE=(0.1 1.0)
+LAMBDAS_BCE=(1.0)
 LAMBDAS_REG=(0 0.01)
 LAMBDAS_RIESZ=(1.0)
-SENTIMENT_HEAD_TYPES=("fcn" "linear")
+SENTIMENT_HEAD_TYPES=("linear")
 SYNTHETIC_ATES=(-0.50 -0.25 0.25 0.50)
 
 # Loop over all parameter combinations
@@ -25,7 +25,7 @@ for MODEL in "${PRETRAINED_MODELS[@]}"; do
                                     ATE_SIGN="pos"
                                 fi
                                 ATE_VALUE=$(echo "$SYNTHETIC_ATE" | awk '{printf "%.2f", $1}' | sed 's/-//;s/\.//')
-                                PROJECT_NAME="causal_sentiment_synthetic_cranberry_${ATE_SIGN}${ATE_VALUE}"
+                                PROJECT_NAME="causal_sentiment_synthetic_iceberg_${ATE_SIGN}${ATE_VALUE}"
 
                                 echo "Running with Model: $MODEL, Unfreeze Backbone: $BACKBONE, Riesz Head: $RIESZ_HEAD, Sentiment Head: $SENTIMENT_HEAD, Lambda BCE: $LAMBDA_BCE, Lambda REG: $LAMBDA_REG, Lambda RIESZ: $LAMBDA_RIESZ, Synthetic ATE: $SYNTHETIC_ATE, Project: $PROJECT_NAME"
 
@@ -37,15 +37,15 @@ for MODEL in "${PRETRAINED_MODELS[@]}"; do
                                     --riesz_head_type "$RIESZ_HEAD" \
                                     --sentiment_head_type "$SENTIMENT_HEAD" \
                                     --epochs 10 \
-                                    --limit_data 0 \
+                                    --limit_data 2000 \
                                     --max_seq_length 150 \
                                     --lr 5e-5 \
-                                    --treatment_phrase cranberry \
+                                    --treatment_phrase iceberg \
                                     --lambda_bce "$LAMBDA_BCE" \
                                     --lambda_reg "$LAMBDA_REG" \
                                     --lambda_riesz "$LAMBDA_RIESZ" \
                                     --dataset imdb \
-                                    --log_every 100 \
+                                    --log_every 10 \
                                     --adjust_ate \
                                     --synthetic_ate "$SYNTHETIC_ATE" \
                                     --synthetic_ate_treat_fraction 0.5 \

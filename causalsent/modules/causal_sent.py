@@ -1,7 +1,7 @@
 from transformers import DistilBertModel, LlamaModel
 import torch
-from causalign.modules.causal_sent_heads import RieszHead, SentimentHead
-from causalign.constants import SUPPORTED_BACKBONES_LIST, HF_TOKEN
+from causalsent.modules.causal_sent_heads import RieszHead, SentimentHead
+from causalsent.constants import SUPPORTED_BACKBONES_LIST, HF_TOKEN
 from typing import Union
 import warnings
 
@@ -9,8 +9,8 @@ import warnings
 class CausalSent(torch.nn.Module):
     def __init__(self, 
                 pretrained_model_name: str,
-                sentiment_head_type = 'fcn', # 'fcn', 'linear', 'conv'
-                riesz_head_type = 'fcn', # 'fcn', 'linear', 'conv'
+                sentiment_head_type = 'linear', # 'fcn', 'linear', 'conv'
+                riesz_head_type = 'linear', # 'fcn', 'linear', 'conv'
                 ):
         """ 
         Causal Sentence Embedding Model.
@@ -34,26 +34,21 @@ class CausalSent(torch.nn.Module):
             print(f"Supported models: {SUPPORTED_BACKBONES_LIST}")
             
         if "bert" in pretrained_model_name:
-            self.backbone_riesz = DistilBertModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
-            self.backbone_sentiment = DistilBertModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
+            self.backbone = DistilBertModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
             backbone_type = "DistilBERT"
         elif "llama" in pretrained_model_name:
             # Example: Uncomment below if LLaMA 3.1 8B is desired
-            self.backbone_riesz = LlamaModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
-            self.backbone_sentiment = LlamaModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
+            self.backbone = LlamaModel.from_pretrained(pretrained_model_name, token=HF_TOKEN)
             backbone_type = "LLaMA"
         else:
             raise ValueError(f"[ERROR] Unsupported model name: {pretrained_model_name}. "
                             f"Expected 'bert' or 'llama' in the name.")
             
-        # sentiment and riesz backbones always use the same model and share their hidden size
-        backbone_hidden_size = self.backbone_sentiment.config.hidden_size 
+        backbone_hidden_size = self.backbone.config.hidden_size
         self.backbone_hidden_size = backbone_hidden_size
 
         # Freeze backbone parameters initially
-        for param in self.backbone_riesz.parameters():
-            param.requires_grad = False
-        for param in self.backbone_sentiment.parameters():
+        for param in self.backbone.parameters():
             param.requires_grad = False
 
         # Print backbone model information
@@ -108,20 +103,16 @@ class CausalSent(torch.nn.Module):
         trainable_percentage = (trainable_params / total_params) * 100
         return trainable_percentage
     
-    def percentage_trainable_component_params(self, component_name: str):
+    def percentage_trainable_backbone_params(self):
         """
         Returns the percentage of trainable backbone parameters (float).
         """
-        if not component_name in ["backbone_riesz", "backbone_sentiment", "riesz", "sentiment"]:
-            raise ValueError(f"Invalid component name: {component_name}. Must be one of 'backbone_riesz', 'backbone_sentiment', 'riesz', or 'sentiment'.")
-        
-        component = getattr(self, component_name)
-        total_params = sum(p.numel() for p in component.parameters())
-        trainable_params = sum(p.numel() for p in component.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.backbone.parameters())
+        trainable_params = sum(p.numel() for p in self.backbone.parameters() if p.requires_grad)
         trainable_percentage = (trainable_params / total_params) * 100
         return trainable_percentage
             
-    def unfreeze_backbone_component_fraction(self, fraction: float, component_str: str):
+    def unfreeze_backbone_fraction(self, fraction: float):
         """ 
         Unfreeze a fraction of the backbone layers. Only considers top-level 
         layers. Rounds to an integer number of layers and unfreezes.
@@ -129,16 +120,12 @@ class CausalSent(torch.nn.Module):
         Parameters:
         - fraction: float
             Fraction of backbone layers to unfreeze.
-        - which_component: str
-            Which backbone to unfreeze. Options: 'backbone_riesz', 'backbone_sentiment'
             
         Returns tuple of the percentages of trainable parameters in the backbone and overall model.
         """
         eps = 1e-2
         
-        backbone = getattr(self, component_str)
-        
-        encoder = getattr(backbone, "encoder", getattr(backbone, "transformer", None))
+        encoder = getattr(self.backbone, "encoder", getattr(self.backbone, "transformer", None))
         
         if encoder is None:
             raise AttributeError("The backbone model does not have an 'encoder' or 'transformer' attribute.")
@@ -151,36 +138,33 @@ class CausalSent(torch.nn.Module):
         else:
             num_layers_to_unfreeze = int(total_backbone_layers * fraction)
         
-        return self.unfreeze_backbone(component = backbone, num_layers=num_layers_to_unfreeze)
+        return self.unfreeze_backbone(num_layers=num_layers_to_unfreeze)
 
     def unfreeze_backbone(self, 
-                        component: torch.nn.Module,
                         num_layers: Union[str, int] = 'all', 
                         verbose: bool = False):
         """ 
         Iteratively unfreeze backbone layers.
 
         Parameters:
-        - component: The backbone module to unfreeze.
         - num_layers: Union[str, int], default='all'
             Number of backbone layers to unfreeze.
             If 'all', unfreeze all layers. 
             
         Returns dict of the percentages of trainable parameters in the overall model and backbone.
         """
-        backbone = component
         if isinstance(num_layers, int) and num_layers <= 0:  
             pass # don't unfreeze anything
         else:
             print("\n" + "=" * 50)
             print("Unfreezing Backbone Layers:")
 
-            encoder = getattr(backbone, "encoder", getattr(backbone, "transformer", None))
+            encoder = getattr(self.backbone, "encoder", getattr(self.backbone, "transformer", None))
             if encoder is None:
                 raise AttributeError("The backbone model does not have an 'encoder' or 'transformer' attribute.")
 
             if num_layers == 'all':
-                for param in backbone.parameters():
+                for param in self.backbone.parameters():
                     param.requires_grad = True
                 print("  > All layers have been unfrozen.\n(This includes e.g. embeddings prior to the DistilBERT tranformer if using DistilBERT.)")
             else:
@@ -196,12 +180,12 @@ class CausalSent(torch.nn.Module):
 
             # Verbose unfreezing output
             if verbose:
-                for name, param in backbone.named_parameters():
+                for name, param in self.backbone.named_parameters():
                     if param.requires_grad:
                         print(f"    - Unfrozen: {name}")
 
-            total_params = sum(p.numel() for p in backbone.parameters())
-            trainable_params_after = sum(p.numel() for p in backbone.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in self.backbone.parameters())
+            trainable_params_after = sum(p.numel() for p in self.backbone.parameters() if p.requires_grad)
             trainable_percentage = (trainable_params_after / total_params) * 100
 
             print(f"\nBackbone Parameters Summary:")
@@ -211,8 +195,7 @@ class CausalSent(torch.nn.Module):
             print("=" * 50 + "\n")
         
         return {"trainable_model": self.percentage_trainable_params(),
-                "trainable_backbone_riesz": self.percentage_trainable_component_params("backbone_riesz"), 
-                "trainable_backbone_sentiment": self.percentage_trainable_component_params("backbone_sentiment")}
+                "trainable_backbone": self.percentage_trainable_backbone_params()}
 
     def forward(self,
                 input_ids_real, 
@@ -223,93 +206,63 @@ class CausalSent(torch.nn.Module):
                 attention_mask_control)-> Union[torch.Tensor, tuple]:
         
         if self.training:
-            backbone = None
-            backbone_strs = ("backbone_riesz", "backbone_sentiment")
-            
-            output_real = {k: None for k in backbone_strs}
-            output_treated = {k: None for k in backbone_strs}
-            output_control = {k: None for k in backbone_strs}
-            
-            embedding_real = {k: None for k in backbone_strs}
-            embedding_treated = {k: None for k in backbone_strs}
-            embedding_control = {k: None for k in backbone_strs}
-            
-            for backbone_str in ("backbone_riesz", "backbone_sentiment"):
-                backbone = getattr(self, backbone_str)
-                output_real[backbone_str] = backbone(input_ids_real, attention_mask=attention_mask_real)
-                output_treated[backbone_str] = backbone(input_ids_treated, attention_mask=attention_mask_treated)
-                output_control[backbone_str] = backbone(input_ids_control, attention_mask=attention_mask_control)
-                
-                # Produce single embedding for FCN or linear layers 
-                # Retain sequence otherwise 
-                
-                if backbone_str == "backbone_riesz":
-                    if self.riesz_head_type in ['fcn', 'linear']:
-                        if isinstance(backbone, DistilBertModel):
-                            embedding_real[backbone_str] = output_real[backbone_str].last_hidden_state[:, 0, :]  # CLS token embedding
-                            embedding_treated[backbone_str] = output_treated[backbone_str].last_hidden_state[:, 0, :]
-                            embedding_control[backbone_str] = output_control[backbone_str].last_hidden_state[:, 0, :]
-                        elif isinstance(backbone, LlamaModel):
-                            embedding_real[backbone_str] = output_real[backbone_str].last_hidden_state[:, -1, :]  # Last token embedding
-                            embedding_treated[backbone_str] = output_treated[backbone_str].last_hidden_state[:, -1, :]
-                            embedding_control[backbone_str] = output_control[backbone_str].last_hidden_state[:, -1, :]
-                        else:
-                            raise ValueError("[ERROR] Unsupported backbone model.")
-                elif backbone_str == "backbone_sentiment":
-                    if self.sentiment_head_type in ['fcn', 'linear']:
-                        if isinstance(backbone, DistilBertModel):
-                            embedding_real[backbone_str] = output_real[backbone_str].last_hidden_state[:, 0, :]  # CLS token embedding
-                            embedding_treated[backbone_str] = output_treated[backbone_str].last_hidden_state[:, 0, :]
-                            embedding_control[backbone_str] = output_control[backbone_str].last_hidden_state[:, 0, :]
-                        elif isinstance(backbone, LlamaModel):
-                            embedding_real[backbone_str] = output_real[backbone_str].last_hidden_state[:, -1, :]  # Last token embedding
-                            embedding_treated[backbone_str] = output_treated[backbone_str].last_hidden_state[:, -1, :]
-                            embedding_control[backbone_str] = output_control[backbone_str].last_hidden_state[:, -1, :]
-                        else:
-                            raise ValueError("[ERROR] Unsupported backbone model.")          
+            backbone_output_real = self.backbone(input_ids_real, attention_mask=attention_mask_real)
+            backbone_output_treated = self.backbone(input_ids_treated, attention_mask=attention_mask_treated)
+            backbone_output_control = self.backbone(input_ids_control, attention_mask=attention_mask_control)
+
+            # Produce single embedding for FCN or linear layers 
+            # Retain sequence otherwise 
+            if self.riesz_head_type in ['fcn', 'linear'] or self.sentiment_head_type in ['fcn', 'linear']:
+                if isinstance(self.backbone, DistilBertModel):
+                    embedding_real = backbone_output_real.last_hidden_state[:, 0, :]  # CLS token embedding
+                    embedding_treated = backbone_output_treated.last_hidden_state[:, 0, :]
+                    embedding_control = backbone_output_control.last_hidden_state[:, 0, :]
+                elif isinstance(self.backbone, LlamaModel):
+                    embedding_real = backbone_output_real.last_hidden_state[:, -1, :]  # Last token embedding
+                    embedding_treated = backbone_output_treated.last_hidden_state[:, -1, :]
+                    embedding_control = backbone_output_control.last_hidden_state[:, -1, :]
+                else:
+                    raise ValueError("[ERROR] Unsupported backbone model.")
 
             # =========== Produce RR and Sentiment Outputs ===========
-            for backbone_str in ("backbone_riesz", "backbone_sentiment"):
-                if backbone_str == "backbone_riesz":
-                    if self.riesz_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
-                        riesz_output_real = self.riesz(embedding_real[backbone_str])
-                        riesz_output_treated = self.riesz(embedding_treated[backbone_str])
-                        riesz_output_control = self.riesz(embedding_control[backbone_str])
-                    elif self.riesz_head_type == 'conv':  # pass sequence of embeddings to conv
-                        riesz_output_real = self.riesz(output_real[backbone_str].last_hidden_state)
-                        riesz_output_treated = self.riesz(output_treated[backbone_str].last_hidden_state)
-                        riesz_output_control = self.riesz(output_control[backbone_str].last_hidden_state)
-                    else:
-                        raise ValueError(f"[ERROR] Unsupported Riesz head type: {self.riesz_head_type}.")
+            if self.riesz_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
+                riesz_output_real = self.riesz(embedding_real)
+                riesz_output_treated = self.riesz(embedding_treated)
+                riesz_output_control = self.riesz(embedding_control)
+            elif self.riesz_head_type == 'conv':  # pass sequence of embeddings to conv
+                riesz_output_real = self.riesz(backbone_output_real.last_hidden_state)
+                riesz_output_treated = self.riesz(backbone_output_treated.last_hidden_state)
+                riesz_output_control = self.riesz(backbone_output_control.last_hidden_state)
+            else:
+                raise ValueError(f"[ERROR] Unsupported Riesz head type: {self.riesz_head_type}.")
                 
-                elif backbone_str == "backbone_sentiment":
-                    if self.sentiment_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
-                        sentiment_output_real = self.sentiment(embedding_real[backbone_str])
-                        sentiment_output_treated = self.sentiment(embedding_treated[backbone_str])
-                        sentiment_output_control = self.sentiment(embedding_control[backbone_str])
-                    elif self.sentiment_head_type == 'conv': # pass sequence of embeddings to conv
-                        sentiment_output_real = self.sentiment(output_real[backbone_str].last_hidden_state)
-                        sentiment_output_treated = self.sentiment(output_treated[backbone_str].last_hidden_state)
-                        sentiment_output_control = self.sentiment(output_control[backbone_str].last_hidden_state)
-                    else:
-                        raise ValueError(f"[ERROR] Unsupported sentiment head type: {self.sentiment_head_type}.")
+            if self.sentiment_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
+                sentiment_output_real = self.sentiment(embedding_real)
+                sentiment_output_treated = self.sentiment(embedding_treated)
+                sentiment_output_control = self.sentiment(embedding_control)
+            elif self.sentiment_head_type == 'conv': # pass sequence of embeddings to conv
+                sentiment_output_real = self.sentiment(backbone_output_real.last_hidden_state)
+                sentiment_output_treated = self.sentiment(backbone_output_treated.last_hidden_state)
+                sentiment_output_control = self.sentiment(backbone_output_control.last_hidden_state)
+            else:
+                raise ValueError(f"[ERROR] Unsupported sentiment head type: {self.sentiment_head_type}.")
 
             return (sentiment_output_real, sentiment_output_treated, sentiment_output_control, 
                     riesz_output_real, riesz_output_treated, riesz_output_control)
         else:
-            sb_output_real = self.backbone_sentiment(input_ids_real, attention_mask=attention_mask_real)
+            backbone_output_real = self.backbone(input_ids_real, attention_mask=attention_mask_real)
             
             embedding_real = None
             embeddings_real = None
             if self.sentiment_head_type in ['fcn', 'linear']: # Pass pooled embeddings to fcn or linear
-                if isinstance(self.backbone_sentiment, DistilBertModel):
-                    embedding_real = sb_output_real.last_hidden_state[:, 0, :]  # CLS token embedding
-                elif isinstance(self.backbone_sentiment, LlamaModel):
-                    embedding_real = sb_output_real.last_hidden_state[:, -1, :]  # Last token embedding
+                if isinstance(self.backbone, DistilBertModel):
+                    embedding_real = backbone_output_real.last_hidden_state[:, 0, :]  # CLS token embedding
+                elif isinstance(self.backbone, LlamaModel):
+                    embedding_real = backbone_output_real.last_hidden_state[:, -1, :]  # Last token embedding
                 else:
                     raise ValueError("[ERROR] Unsupported backbone model.")
             elif self.sentiment_head_type == 'conv': # pass sequence of embeddings to conv
-                embeddings_real = sb_output_real.last_hidden_state
+                embeddings_real = backbone_output_real.last_hidden_state
             else:
                 raise ValueError(f"[ERROR] Unsupported sentiment head type: {self.sentiment_head_type}.")
             
@@ -322,7 +275,7 @@ class CausalSent(torch.nn.Module):
                 raise ValueError("[ERROR] No valid embeddings found for sentiment head.")
 
             return sentiment_output_real
-
+        
     # ==== components for partial freezing/ unfreezing ====
     # needed for interleaved training, riesz-only training, etc.   
     def freeze_component(self, component_name: str):

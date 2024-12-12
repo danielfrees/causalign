@@ -13,11 +13,11 @@ from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import StepLR
 from sklearn.metrics import accuracy_score, f1_score
-from causalign.data.utils import load_imdb_data, load_civil_comments_data
-from causalign.data.generators import IMDBDataset, CivilCommentsDataset
-from causalign.modules.causal_sent import CausalSent
-from causalign.data.generators import SimilarityDataset
-from causalign.utils import (save_model, load_model_inference, 
+from causalsent.data.utils import load_imdb_data, load_civil_comments_data
+from causalsent.data.generators import IMDBDataset, CivilCommentsDataset
+from causalsent.modules.causal_sent import CausalSent
+from causalsent.data.generators import SimilarityDataset
+from causalsent.utils import (save_model, load_model_inference, 
                     get_default_sent_training_args, seed_everything, 
                     EarlyStopper, initialize_database, save_arguments_to_db,
                     save_metrics_to_db, save_model_weights_to_db, save_outputs_to_db,
