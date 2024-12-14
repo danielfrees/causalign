@@ -85,23 +85,27 @@ def load_imdb_data(split: str,
     return imdb_ds
 
 def load_civil_comments_data(split: str,
-                civil_comments_data_source: str = "google/civil_comments"):
+                civil_comments_data_source: str = "google/civil_comments", 
+                binarize: bool = True,
+                balance: bool = True):
     civil_ds = load_dataset(civil_comments_data_source, split=split)
-    # map to binary toxicity by toxicity > 0. Heuristic, but makes sense
-    # based on the rare distn of non-zeros. Unclear what Bansal did. 
-    # They do resample to make even + subsample around their heuristic treatment words (kill)
-    civil_ds = civil_ds.map(lambda x: {'toxicity': 1 if x['toxicity'] > 0 else 0})
+    if binarize: 
+        # map to binary toxicity by toxicity > 0. Heuristic, but makes sense
+        # based on the rare distn of non-zeros. Unclear what Bansal did. 
+        # They do resample to make even + subsample around their heuristic treatment words (kill)
+        civil_ds = civil_ds.map(lambda x: {'toxicity': 1 if x['toxicity'] > 0 else 0})
     
-    # subsample to balance classes
-    civil_ds = civil_ds.shuffle(seed=328)
-    num_toxic = civil_ds.filter(lambda x: x['toxicity'] == 1).num_rows
-    num_nontoxic = civil_ds.filter(lambda x: x['toxicity'] == 0).num_rows
-    min_class_size = min(num_toxic, num_nontoxic)
-    
-    toxic_ds = civil_ds.filter(lambda x: x['toxicity'] == 1).select(range(min_class_size))
-    nontoxic_ds = civil_ds.filter(lambda x: x['toxicity'] == 0).select(range(min_class_size))
+    if balance:
+        # subsample to balance classes
+        civil_ds = civil_ds.shuffle(seed=328)
+        num_toxic = civil_ds.filter(lambda x: x['toxicity'] == 1).num_rows
+        num_nontoxic = civil_ds.filter(lambda x: x['toxicity'] == 0).num_rows
+        min_class_size = min(num_toxic, num_nontoxic)
+        
+        toxic_ds = civil_ds.filter(lambda x: x['toxicity'] == 1).select(range(min_class_size))
+        nontoxic_ds = civil_ds.filter(lambda x: x['toxicity'] == 0).select(range(min_class_size))
 
-    # Concatenate the subsampled datasets using concatenate_datasets
-    civil_ds = concatenate_datasets([toxic_ds, nontoxic_ds])
+        # Concatenate the subsampled datasets using concatenate_datasets
+        civil_ds = concatenate_datasets([toxic_ds, nontoxic_ds])
     
     return civil_ds
